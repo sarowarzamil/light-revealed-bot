@@ -40,7 +40,7 @@ pool.connect((err) => {
   else console.log("☁️ Supabase PostgreSQL Connected.");
 });
 
-// --- AI & KNOWLEDGE SETUP ---
+// --- AI & KNOWLEDGE SETUP (Updated) ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 let ultimateTruthDoc = "";
 let dynamicSystemInstruction = "";
