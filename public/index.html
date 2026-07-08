@@ -603,7 +603,7 @@
       async function fetchSidebarSessions() {
         if (!token) return;
         try {
-          const res = await fetch("http://localhost:3000/sessions", {
+          const res = await fetch("/sessions", {
             headers: { Authorization: `Bearer ${token}` },
           });
           const data = await res.json();
@@ -633,7 +633,7 @@
 
         try {
           const res = await fetch(
-            `http://localhost:3000/history/${sessionId}`,
+            `/history/${sessionId}`,
             { headers: { Authorization: `Bearer ${token}` } },
           );
           const data = await res.json();
@@ -693,7 +693,7 @@
 
         const endpoint = isLoginMode ? "/login" : "/signup";
         try {
-          const res = await fetch(`http://localhost:3000${endpoint}`, {
+          const res = await fetch(`${endpoint}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ username: u, password: p }),
@@ -740,7 +740,7 @@
         renderMessage("Thinking...", "bot", typingId);
 
         try {
-          const res = await fetch("http://localhost:3000/chat", {
+          const res = await fetch("/chat", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
