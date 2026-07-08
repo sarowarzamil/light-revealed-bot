@@ -6,15 +6,15 @@
       "use": "@vercel/node"
     }
   ],
-  "rewrites": [
-    { "source": "/admin.html", "destination": "/server.js" },
-    { "source": "/signup", "destination": "/server.js" },
-    { "source": "/login", "destination": "/server.js" },
-    { "source": "/sessions", "destination": "/server.js" },
-    { "source": "/history/(.*)", "destination": "/server.js" },
-    { "source": "/chat", "destination": "/server.js" },
-    { "source": "/api/(.*)", "destination": "/server.js" },
-    { "source": "/", "destination": "/public/index.html" },
-    { "source": "/(.*).(css|js|png|jpg|ico)", "destination": "/public/$1.$2" }
+  "routes": [
+    { "src": "/admin.html", "dest": "/server.js" },
+    { "src": "/signup", "dest": "/server.js" },
+    { "src": "/login", "dest": "/server.js" },
+    { "src": "/sessions", "dest": "/server.js" },
+    { "src": "/history/(.*)", "dest": "/server.js" },
+    { "src": "/chat", "dest": "/server.js" },
+    { "src": "/api/(.*)", "dest": "/server.js" },
+    { "src": "/", "dest": "/public/index.html" },
+    { "src": "/(.*)", "dest": "/public/$1" }
   ]
 }
