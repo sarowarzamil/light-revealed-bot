@@ -391,6 +391,8 @@ app.get("/api/discord/register", async (req, res) => {
   }
 });
 
+
+// 1. THE RECEIVER (Talks to Discord fast, triggers worker)
 app.post("/api/discord", async (req, res) => {
   const signature = req.headers["x-signature-ed25519"];
   const timestamp = req.headers["x-signature-timestamp"];
@@ -413,66 +415,107 @@ app.post("/api/discord", async (req, res) => {
 
   if (interaction.type === 2 && interaction.data.name === "ask") {
     
-    // STEP A: IMMEDIATELY ACKNOWLEDGE (Type 5 = Deferred)
-    res.json({ type: 5 }); 
+    // Package up the info we need for the AI
+    const payload = {
+      token: interaction.token,
+      userMessage: interaction.data.options[0].value,
+      userName: interaction.member.user.username
+    };
 
-    const userMessage = interaction.data.options[0].value;
-    const userName = interaction.member.user.username; 
-    
-    // STEP B: PROCESS AI IN BACKGROUND & PUSH TO DISCORD
-    try {
-      // Use the retry wrapper function here
-      const botReply = await processCoreAIRequestWithRetry(userMessage, []);
-      const fullResponse = `**${userName} asked:** "${userMessage}"\n\n${botReply}`;
+    // TRIGGER THE BACKGROUND WORKER
+    // We send this to our own server, which forces Vercel to open a second server instance that won't freeze!
+    const workerUrl = `https://${req.headers.host}/api/discord/worker`;
+    fetch(workerUrl, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'x-bot-auth': process.env.JWT_SECRET || 'fallback_secret' // Keep it secure
+      },
+      body: JSON.stringify(payload)
+    }).catch(err => console.error("Worker trigger failed:", err));
 
-      // Split the response into safe ~1950 character chunks
-      const messageChunks = splitMessage(fullResponse);
+    // Wait a tiny fraction of a second just to ensure the worker HTTP request is dispatched
+    await new Promise(resolve => setTimeout(resolve, 300));
 
-      // 1. Edit the original "thinking..." message with Chunk 1
-      await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: messageChunks[0] })
-      });
-
-      // 2. If there are extra chunks, send them as follow-up messages sequentially
-      for (let i = 1; i < messageChunks.length; i++) {
-        await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${interaction.token}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: messageChunks[i] })
-        });
-      }
-      
-    } catch (error) {
-      console.error("Discord AI Error:", error);
-      
-      let errorMessage = "⚠️ An error occurred while contacting the Truth Engine.";
-      
-      if (error.status === 429 || (error.message && error.message.includes("429"))) {
-          let waitTime = "a few seconds"; 
-          if (error.errorDetails) {
-              const retryInfo = error.errorDetails.find(d => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo');
-              if (retryInfo && retryInfo.retryDelay) {
-                  waitTime = retryInfo.retryDelay.replace('s', '') + " seconds";
-              }
-          }
-          errorMessage = `⏳ Light Revealed is currently busy. Please wait ${waitTime} and try again.`;
-      } 
-      else if (error.status === 503 || (error.message && error.message.includes("503"))) {
-          errorMessage = "🔥 Light Revealed is now having high volume of requests. Please try asking again in a few seconds.";
-      }
-
-      await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ content: errorMessage })
-      });
-    }
+    // IMMEDIATELY ACKNOWLEDGE DISCORD (Stops the 3-second crash)
+    return res.json({ type: 5 }); 
   }
 });
+
+
+// 2. THE WORKER (Takes its time, talks to Google, updates Discord)
+app.post("/api/discord/worker", async (req, res) => {
+  // Security check so random people on the internet can't trigger this endpoint
+  const authHeader = req.headers['x-bot-auth'];
+  if (authHeader !== (process.env.JWT_SECRET || 'fallback_secret')) {
+    return res.status(401).send("Unauthorized");
+  }
+
+  const { token, userMessage, userName } = req.body;
+
+  try {
+ // 1. Create a "ticking time bomb" promise (55 seconds) to beat Vercel's 60-second limit
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error("VERCEL_TIMEOUT")), 55000); 
+    });
+
+    // 2. Race the AI against the 8-second timer
+    const botReply = await Promise.race([
+      processCoreAIRequestWithRetry(userMessage, []),
+      timeoutPromise
+    ]);
+
+    const fullResponse = `**${userName} asked:** "${userMessage}"\n\n${botReply}`;
+
+    // Split the response into safe chunks
+    const messageChunks = splitMessage(fullResponse);
+
+    // 1. Edit the original "thinking..." message with Chunk 1
+    await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${token}/messages/@original`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: messageChunks[0] })
+    });
+
+    // 2. Send any remaining chunks as follow-up messages
+    for (let i = 1; i < messageChunks.length; i++) {
+      await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: messageChunks[i] })
+      });
+    }
+    
+    return res.json({ success: true });
+
+  } catch (error) {
+    console.error("Worker Error:", error);
+    
+    let errorMessage = "⚠️ An error occurred while contacting the Truth Engine.";
+    
+    // Check if we hit our custom 8-second timeout
+    if (error.message === "VERCEL_TIMEOUT") {
+        errorMessage = "⏳ The question was a bit too complex and I ran out of time to think. Please try asking a slightly more specific question!";
+    }
+    // Check for rate limits and server overload
+    else if (error.status === 429 || (error.message && error.message.includes("429"))) {
+        errorMessage = `⏳ Light Revealed is currently busy. Please wait a few moments and try again.`;
+    } 
+    else if (error.status === 503 || (error.message && error.message.includes("503"))) {
+        errorMessage = "🔥 Light Revealed server is currently experiencing high demand. Please try again in a minute.";
+    }
+
+    // Update Discord with the error
+    await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${token}/messages/@original`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: errorMessage })
+    });
+
+    return res.status(500).json({ error: "Worker failed or timed out" });
+  }
+});
+
 
 buildMasterBrain().then(() => {
   console.log("\n✨ LIGHT REVEALED CLOUD ENGINE OPERATIONAL ✨");
