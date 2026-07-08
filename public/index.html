@@ -29,6 +29,22 @@
         z-index: 1000;
       }
 
+      .close-sidebar-btn {
+    display: none; /* Hidden on desktop */
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 20px;
+    cursor: pointer;
+    align-self: flex-end;
+    margin-bottom: 15px;
+}
+@media (max-width: 768px) {
+    .close-sidebar-btn {
+        display: block; /* Show only on phones */
+    }
+}
+
       .new-chat-btn {
         background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0) 100%);
         color: var(--text-main); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px;
