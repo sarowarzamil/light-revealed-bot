@@ -7,6 +7,11 @@ const { Pool } = require("pg");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 
+// KEEP ONLY THIS FOR ADMIN:
+app.get('/admin.html', adminAuth, (req, res) => {
+    res.sendFile(path.join(process.cwd(), 'admin.html'));
+});
+
 const app = express();
 app.use(cors());
 app.use(express.json());
