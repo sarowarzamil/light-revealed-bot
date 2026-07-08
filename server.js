@@ -10,12 +10,6 @@ const jwt = require("jsonwebtoken");
 const app = express();
 app.use(cors());
 app.use(express.json());
-// Force absolute paths for serverless environments
-app.use(express.static(path.join(__dirname, 'public')));
-
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
 
 // --- ADMIN AUTH VAULT ---
 function adminAuth(req, res, next) {
