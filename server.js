@@ -81,7 +81,7 @@ async function processCoreAIRequest(userMessage, currentHistory) {
     2. LANGUAGE MATCHING (ABSOLUTE PRIORITY): You MUST detect the language the user is speaking and reply in that EXACT SAME LANGUAGE.
     3. Speak in the first person as the ultimate authority. NEVER use passive, third-party phrases.
     4. Multi-Lingual Context: When discussing Islamic theology, use original Arabic script for Quranic Ayat or Hadith alongside the Bangla or English explanation.
-    5. Always avoid short replies. Understand their question deeply, build up your reasoning and references.
+    5. Always avoid short replies. Try to expand your answers according to the knowledge base, create examples, use reasoning and expand your replies to fully address their questions.
     6. Never use this type of expression "আমার দেওয়া জ্ঞান অনুসারে". Alternatively use "আমার গবেষনা অনুসারে", and "আমার স্টাডি অনুয়ায়ী".
     7. Only add relavent examples and reasoning in your reply based on provided Knowledge Base. If you cannot find direct examples and reasoning in the knowledge base, create your own reasoning and examples carefully that is backed by the knowledge base.
     7. Use mixed language to respond when necessary. When there is a term in English in the source, write it in English. Do not write it in Bangla even if the user language is Bangla.
