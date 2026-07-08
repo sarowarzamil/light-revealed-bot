@@ -7,39 +7,18 @@ const { Pool } = require("pg");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 
-// KEEP ONLY THIS FOR ADMIN:
-app.get('/admin.html', adminAuth, (req, res) => {
-    res.sendFile(path.join(process.cwd(), 'admin.html'));
-});
-
 const app = express();
 app.use(cors());
 app.use(express.json());
+// Force absolute paths for serverless environments
+app.use(express.static(path.join(__dirname, 'public')));
 
-// --- ADMIN AUTH VAULT ---
-function adminAuth(req, res, next) {
-  const authHeader = req.headers.authorization || '';
-  const match = authHeader.match(/^Basic (.*)$/i);
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
-  if (!match) {
-    res.set('WWW-Authenticate', 'Basic realm="Admin Control Panel"');
-    return res.status(401).send('Access Denied: Authentication required.');
-  }
-
-  const [username, password] = Buffer.from(match[1], 'base64').toString().split(':');
-
-  // Checks the password against your Vercel Environment Variable
-  if (username === 'admin' && password === process.env.ADMIN_PASSWORD) {
-    return next();
-  }
-
-  res.set('WWW-Authenticate', 'Basic realm="Admin Control Panel"');
-  return res.status(401).send('Access Denied: Invalid credentials.');
-}
-
-// 1. Protect the HTML Page (Notice we removed 'public' from the path!)
-app.get('/admin.html', adminAuth, (req, res) => {
-    res.sendFile(path.join(__dirname, 'admin.html'));
+app.get('/admin.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
 // --- SUPABASE CLOUD DATABASE SETUP ---
@@ -265,7 +244,7 @@ app.post("/chat", authenticateToken, async (req, res) => {
 });
 
 // --- ADMIN API (Cloud Configured) ---
-app.get("/api/settings", adminAuth, async (req, res) => {
+app.get("/api/settings", async (req, res) => {
   try {
     const result = await pool.query(
       "SELECT * FROM settings ORDER BY id DESC LIMIT 1",
@@ -280,7 +259,7 @@ app.get("/api/settings", adminAuth, async (req, res) => {
   }
 });
 
-app.post("/api/settings", adminAuth, async (req, res) => {
+app.post("/api/settings", async (req, res) => {
   const { systemInstruction } = req.body;
   try {
     await pool.query(
@@ -300,7 +279,7 @@ app.post("/api/settings", adminAuth, async (req, res) => {
   }
 });
 
-app.post("/api/sync", adminAuth, async (req, res) => {
+app.post("/api/sync", async (req, res) => {
   await buildMasterBrain();
   res.json({ success: true });
 });
