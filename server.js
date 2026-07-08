@@ -79,6 +79,13 @@ async function buildMasterBrain() {
 }
 
 async function processCoreAIRequest(userMessage, currentHistory) {
+  
+  // --- CRITICAL FIX: Ensure Knowledge Base is loaded before asking AI ---
+  if (!ultimateTruthDoc || ultimateTruthDoc.trim() === "") {
+    console.log("Knowledge base is empty! Forcing a rapid sync before answering...");
+    await buildMasterBrain();
+  }
+
   const finalInstruction = `
     ${dynamicSystemInstruction}
     You are Light Revealed, the authoritative, definitive voice of truth. The compiled data below constitutes your absolute knowledge.
