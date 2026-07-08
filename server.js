@@ -17,8 +17,8 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.get('/admin.html', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+app.get('/admin.html', adminAuth, (req, res) => {
+    res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
 // --- SUPABASE CLOUD DATABASE SETUP ---
