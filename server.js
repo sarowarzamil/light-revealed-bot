@@ -266,7 +266,7 @@ app.post("/chat", authenticateToken, async (req, res) => {
 });
 
 // --- ADMIN API (Cloud Configured) ---
-app.get("/api/settings", async (req, res) => {
+app.get("/api/settings", adminAuth, async (req, res) => {
   try {
     const result = await pool.query(
       "SELECT * FROM settings ORDER BY id DESC LIMIT 1",
@@ -281,7 +281,7 @@ app.get("/api/settings", async (req, res) => {
   }
 });
 
-app.post("/api/settings", async (req, res) => {
+app.post("/api/settings", adminAuth, async (req, res) => {
   const { systemInstruction } = req.body;
   try {
     await pool.query(
@@ -301,7 +301,7 @@ app.post("/api/settings", async (req, res) => {
   }
 });
 
-app.post("/api/sync", async (req, res) => {
+app.post("/api/sync", adminAuth, async (req, res) => {
   await buildMasterBrain();
   res.json({ success: true });
 });
