@@ -373,28 +373,26 @@ app.post("/api/discord", async (req, res) => {
   if (interaction.type === 2 && interaction.data.name === "ask") {
     const userMessage = interaction.data.options[0].value;
     
-    // IMMEDIATELY return a "Deferred" response. 
-    // This satisfies Discord's strict 3-second rule and shows "Light Revealed is thinking..."
-    res.json({ type: 5 }); 
-
-    // Run the AI generation in the background
     try {
-      // Get AI response (using empty history for single slash-command questions)
+      // Wait for the AI to generate the answer FIRST (Forces Vercel to stay awake)
       const botReply = await processCoreAIRequest(userMessage, []);
 
-      // Send the completed answer back to edit the "thinking..." message
-      await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: botReply })
+      // Send the completed answer instantly to Discord (Type 4 = Immediate Message)
+      return res.json({ 
+        type: 4, 
+        data: {
+            content: botReply
+        }
       });
       
     } catch (error) {
       console.error("Discord AI Error:", error);
-      await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: "⚠️ An error occurred while contacting the Truth Engine." })
+      // Send error message directly back
+      return res.json({ 
+        type: 4, 
+        data: {
+            content: "⚠️ An error occurred while contacting the Truth Engine."
+        }
       });
     }
   }
