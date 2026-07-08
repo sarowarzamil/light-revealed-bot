@@ -28,20 +28,38 @@
       th { color: var(--text-muted); font-weight: 500; }
       .limit-input { width: 60px; background: var(--bg-input); border: 1px solid var(--border); color: white; padding: 6px; border-radius: 4px; }
       .btn-small { background-color: var(--accent-blue); padding: 6px 12px; font-size: 12px; }
+
+      /* --- HTML LOCK SCREEN STYLES --- */
+      #lockScreen {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+        background-color: var(--bg-main); z-index: 9999; 
+        display: flex; flex-direction: column; justify-content: center; align-items: center;
+      }
+      .lock-box {
+        background: var(--bg-card); padding: 40px; border-radius: 12px; border: 1px solid var(--border); text-align: center; width: 100%; max-width: 350px;
+      }
+      .lock-box input {
+        width: 100%; padding: 12px; margin: 20px 0; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-input); color: white; outline: none;
+      }
+      .lock-box button { width: 100%; background: var(--accent-blue); padding: 12px; font-weight: bold; }
+      #lockError { color: #ef4444; font-size: 13px; margin-top: 10px; display: none; }
+      
+      /* Hide the main panel initially */
+      #mainAdminPanel { display: none; } 
     </style>
   </head>
   <body>
     
-    <script>
-      // Auth Lock - Exactly as you had it
-      const password = prompt("Enter Admin Password:");
-      if (password !== "shawon300") {
-          alert("Access Denied!");
-          window.location.href = "/";
-      }
-    </script>
+    <div id="lockScreen">
+      <div class="lock-box">
+        <h2>Admin Authentication</h2>
+        <input type="password" id="adminPassword" placeholder="Enter Password" onkeypress="handleEnter(event)">
+        <button onclick="checkPassword()">Unlock Control Panel</button>
+        <div id="lockError">Incorrect Password. Access Denied.</div>
+      </div>
+    </div>
 
-    <div class="admin-container">
+    <div class="admin-container" id="mainAdminPanel">
       <h1>Light Revealed Cloud Control</h1>
       <div class="subtitle">Manage AI personality rules and synchronize the Supabase engine.</div>
 
@@ -76,7 +94,28 @@
     </div>
 
     <script>
-      // State Variables for Pagination & Search
+      // --- AUTHENTICATION LOGIC ---
+      function checkPassword() {
+        const pass = document.getElementById("adminPassword").value;
+        if (pass === "shawon300") {
+          // Hide lock screen, show dashboard
+          document.getElementById("lockScreen").style.display = "none";
+          document.getElementById("mainAdminPanel").style.display = "block";
+          
+          // Only fetch data from the server AFTER successful unlock
+          loadSettings();
+          loadUsers();
+        } else {
+          document.getElementById("lockError").style.display = "block";
+        }
+      }
+
+      // Allow pressing "Enter" to submit password
+      function handleEnter(e) {
+        if (e.key === 'Enter') checkPassword();
+      }
+
+      // --- DASHBOARD LOGIC (Pagination & Search) ---
       let allUsers = [];
       let currentPage = 1;
       const usersPerPage = 20;
@@ -172,10 +211,6 @@
           alert("User limit updated successfully!");
         } catch (e) { alert("Failed to update limit."); }
       }
-
-      // Initialize
-      loadSettings();
-      loadUsers();
     </script>
   </body>
 </html>
