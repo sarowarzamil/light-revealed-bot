@@ -10,7 +10,8 @@ const jwt = require("jsonwebtoken");
 const app = express();
 app.use(cors());
 app.use(express.json());
-// Force absolute paths for serverless environments
+
+// --- RESTORED ORIGINAL WORKING ROUTES ---
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => {
@@ -37,7 +38,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 let ultimateTruthDoc = "";
 let dynamicSystemInstruction = "";
 const guestMemoryMap = new Map(); 
-const guestRateLimitMap = new Map(); // Tracks guest chat limits by IP
+const guestRateLimitMap = new Map(); 
 
 async function buildMasterBrain() {
   console.log("=== STARTING KNOWLEDGE BASE SYNC ===");
@@ -76,10 +77,10 @@ async function processCoreAIRequest(userMessage, currentHistory) {
     You are Light Revealed, the authoritative, definitive voice of truth. The compiled data below constitutes your absolute knowledge.
     
      CRITICAL PERSONA RULES:
-    1. LANGUAGE MATCHING (ABSOLUTE PRIORITY): You MUST detect the language the user is speaking and reply in that EXACT SAME LANGUAGE. If the user asks in English, you must translate the facts from your Bangla knowledge base and reply completely in English. If they ask in Bangla, reply in Bangla.
-    2. Speak in the first person as the ultimate authority. NEVER use passive, third-party phrases like "প্রদত্ত উৎস অনুযায়ী" (According to the source) or "উৎসে বলা হয়েছে" (The source says) or "উৎসে দেখানো হয়েছে" (The source illustrated) or "উৎসে প্রমান করা হয়েছে" (The source proved) or anything similar to this. State the facts directly as your own indisputable knowledge.
-    3. Multi-Lingual Context: When discussing Islamic theology, use original Arabic script for Quranic Ayat or Hadith alongside the Bangla or English explanation. Seamlessly weave English terminology into Bangla explanations if it clarifies the concept.
-    4. Always avoid short replies. Understand their question deeply, build up your reasoning and references according the ultimate truth you've been given.
+    1. LANGUAGE MATCHING (ABSOLUTE PRIORITY): You MUST detect the language the user is speaking and reply in that EXACT SAME LANGUAGE.
+    2. Speak in the first person as the ultimate authority. NEVER use passive, third-party phrases.
+    3. Multi-Lingual Context: When discussing Islamic theology, use original Arabic script for Quranic Ayat or Hadith alongside the Bangla or English explanation.
+    4. Always avoid short replies. Understand their question deeply, build up your reasoning and references.
     5. Never use this type of expression "আমার দেওয়া জ্ঞান অনুসারে". Alternatively use "আমার গবেষনা অনুসারে", and "আমার স্টাডি অনুয়ায়ী".
     
     OUT-OF-BOUNDS FALLBACK:
@@ -183,35 +184,29 @@ app.get("/history/:sessionId", authenticateToken, async (req, res) => {
 app.post("/chat", authenticateToken, async (req, res) => {
   const { message, sessionId } = req.body;
   const isGuest = !req.user;
-  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+  const today = new Date().toISOString().split('T')[0];
 
   try {
     let currentHistory = [];
 
     // --- RATE LIMITING LOGIC ---
     if (!isGuest) {
-      // Registered User Limits
       const userRes = await pool.query("SELECT daily_chat_count, custom_limit, last_reset_date FROM users WHERE id = $1", [req.user.id]);
       if (userRes.rows.length > 0) {
         const userData = userRes.rows[0];
         const lastReset = userData.last_reset_date ? new Date(userData.last_reset_date).toISOString().split('T')[0] : '';
         
-        // Reset count if it's a new day
         if (lastReset !== today) {
           await pool.query("UPDATE users SET daily_chat_count = 0, last_reset_date = CURRENT_DATE WHERE id = $1", [req.user.id]);
           userData.daily_chat_count = 0;
         }
 
-        // Block if limit exceeded
         if (userData.daily_chat_count >= userData.custom_limit) {
           return res.json({ reply: "⚠️ Your daily chat limit has been reached. Please contact the admin or try again tomorrow." });
         }
-
-        // Increment count
         await pool.query("UPDATE users SET daily_chat_count = daily_chat_count + 1 WHERE id = $1", [req.user.id]);
       }
     } else {
-      // Guest IP Limits
       const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
       if (!guestRateLimitMap.has(ip)) guestRateLimitMap.set(ip, { count: 0, date: today });
       
@@ -220,7 +215,6 @@ app.post("/chat", authenticateToken, async (req, res) => {
         guestData.count = 0;
         guestData.date = today;
       }
-      
       if (guestData.count >= 5) {
         return res.json({ reply: "⚠️ Guest daily chat limit (5) reached. Please Sign Up to continue chatting, or try again tomorrow." });
       }
@@ -283,7 +277,6 @@ app.post("/api/sync", async (req, res) => {
   res.json({ success: true });
 });
 
-// User Management APIs
 app.get("/api/users", async (req, res) => {
   try {
     const result = await pool.query("SELECT id, username, daily_chat_count, custom_limit FROM users ORDER BY id DESC");
@@ -303,7 +296,6 @@ app.post("/api/update-limit", async (req, res) => {
   }
 });
 
-// Build the brain immediately when the serverless function spins up
 buildMasterBrain().then(() => {
   console.log("\n✨ LIGHT REVEALED CLOUD ENGINE OPERATIONAL ✨");
 });
