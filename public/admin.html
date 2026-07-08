@@ -147,6 +147,15 @@
     </div>
 
     <script>
+// LOCK DOWN THE PAGE
+  const password = prompt("Enter Admin Password:");
+  if (password !== "shawon300") {
+      alert("Access Denied!");
+      window.location.href = "/"; // Redirects back home
+  }
+  
+  // ... rest of your existing code
+      
       async function loadSettings() {
         const res = await fetch("/api/settings");
         const data = await res.json();
