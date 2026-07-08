@@ -17,6 +17,28 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// --- ADMIN AUTH VAULT ---
+function adminAuth(req, res, next) {
+  const authHeader = req.headers.authorization || '';
+  const match = authHeader.match(/^Basic (.*)$/i);
+
+  if (!match) {
+    res.set('WWW-Authenticate', 'Basic realm="Admin Control Panel"');
+    return res.status(401).send('Access Denied: Authentication required.');
+  }
+
+  const [username, password] = Buffer.from(match[1], 'base64').toString().split(':');
+
+  // Checks the password against your Vercel Environment Variable
+  if (username === 'admin' && password === process.env.ADMIN_PASSWORD) {
+    return next();
+  }
+
+  res.set('WWW-Authenticate', 'Basic realm="Admin Control Panel"');
+  return res.status(401).send('Access Denied: Invalid credentials.');
+}
+
+// 1. Protect the HTML Page (Notice we removed 'public' from the path!)
 app.get('/admin.html', adminAuth, (req, res) => {
     res.sendFile(path.join(__dirname, 'admin.html'));
 });
