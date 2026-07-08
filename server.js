@@ -371,24 +371,33 @@ app.post("/api/discord", async (req, res) => {
 
   const interaction = req.body;
 
-// Handle the /ask command
-  if (interaction.type === 2 && interaction.data.name === "ask") {
-    const userMessage = interaction.data.options[0].value;
-    const userName = interaction.member.user.username; // Capture the Discord username
-    
-    try {
-      // Wait for the AI to generate the answer FIRST (Forces Vercel to stay awake)
-      const botReply = await processCoreAIRequest(userMessage, []);
+  // --- CRITICAL FIX 1: Handle Discord PING for verification ---
+  if (interaction.type === 1) {
+    return res.json({ type: 1 });
+  }
 
-      // Format: Echo the user's question, then show the AI reply
+  // --- CRITICAL FIX 2: Handle the /ask command with Deferred method ---
+  if (interaction.type === 2 && interaction.data.name === "ask") {
+    
+    // STEP A: IMMEDIATELY ACKNOWLEDGE (Type 5 = Deferred)
+    // This stops the 3-second timeout and shows "Bot is thinking..."
+    res.json({ type: 5 }); 
+
+    const userMessage = interaction.data.options[0].value;
+    const userName = interaction.member.user.username; 
+    
+    // STEP B: PROCESS AI IN BACKGROUND & PUSH TO DISCORD
+    try {
+      const botReply = await processCoreAIRequest(userMessage, []);
       const fullResponse = `**${userName} asked:** "${userMessage}"\n\n${botReply}`;
 
-      // Send the completed answer instantly to Discord (Type 4 = Immediate Message)
-      return res.json({ 
-        type: 4, 
-        data: {
-            content: fullResponse
-        }
+      // Use the Discord Webhook API to edit the "thinking" message with the final answer
+      await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ content: fullResponse })
       });
       
     } catch (error) {
@@ -396,25 +405,24 @@ app.post("/api/discord", async (req, res) => {
       
       let errorMessage = "⚠️ An error occurred while contacting the Truth Engine.";
       
-      // Check if it's the specific Google 429 API Rate Limit error
       if (error.status === 429 || (error.message && error.message.includes("429"))) {
-          
-          // Try to extract the retry delay from the error details
-          let waitTime = "a few seconds"; // Default
+          let waitTime = "a few seconds"; 
           if (error.errorDetails) {
               const retryInfo = error.errorDetails.find(d => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo');
               if (retryInfo && retryInfo.retryDelay) {
-                  // retryDelay comes in as "9s" or "600s"
                   waitTime = retryInfo.retryDelay.replace('s', '') + " seconds";
               }
           }
-          
           errorMessage = `⏳ The AI is currently busy. Please wait ${waitTime} and try again.`;
       }
 
-      return res.json({ 
-        type: 4, 
-        data: { content: errorMessage }
+      // Update the deferred message with the error
+      await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ content: errorMessage })
       });
     }
   }
