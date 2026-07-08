@@ -7,13 +7,9 @@
     }
   ],
   "rewrites": [
-    { "source": "/chat", "destination": "/server.js" },
-    { "source": "/login", "destination": "/server.js" },
-    { "source": "/signup", "destination": "/server.js" },
-    { "source": "/sessions", "destination": "/server.js" },
-    { "source": "/history/(.*)", "destination": "/server.js" },
-    { "source": "/api/(.*)", "destination": "/server.js" },
-    { "source": "/", "destination": "/public/index.html" },
-    { "source": "/admin.html", "destination": "/public/admin.html" }
+    {
+      "source": "/(.*)",
+      "destination": "/server.js"
+    }
   ]
 }
