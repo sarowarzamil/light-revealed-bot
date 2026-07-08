@@ -6,15 +6,10 @@
       "use": "@vercel/node"
     }
   ],
-  "routes": [
-    { "src": "/admin.html", "dest": "/server.js" },
-    { "src": "/signup", "dest": "/server.js" },
-    { "src": "/login", "dest": "/server.js" },
-    { "src": "/sessions", "dest": "/server.js" },
-    { "src": "/history/(.*)", "dest": "/server.js" },
-    { "src": "/chat", "dest": "/server.js" },
-    { "src": "/api/(.*)", "dest": "/server.js" },
-    { "src": "/", "dest": "/public/index.html" },
-    { "src": "/(.*)", "dest": "/public/$1" }
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/server.js"
+    }
   ]
 }
