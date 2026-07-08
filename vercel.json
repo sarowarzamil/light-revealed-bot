@@ -7,9 +7,12 @@
     }
   ],
   "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/server.js"
-    }
-  ]
+    { "source": "/signup", "destination": "/server.js" },
+    { "source": "/login", "destination": "/server.js" },
+    { "source": "/sessions", "destination": "/server.js" },
+    { "source": "/history/(.*)", "destination": "/server.js" },
+    { "source": "/chat", "destination": "/server.js" },
+    { "source": "/api/(.*)", "destination": "/server.js" },
+    { "source": "/admin.html", "destination": "/server.js" }
+]
 }
