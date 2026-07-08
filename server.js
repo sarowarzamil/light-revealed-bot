@@ -6,7 +6,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { Pool } = require("pg");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const { verifyKey } = require("discord-interactions"); // <-- NEW DISCORD IMPORT
+const { verifyKey } = require("discord-interactions"); 
 
 const app = express();
 app.use(cors());
@@ -124,6 +124,44 @@ async function processCoreAIRequest(userMessage, currentHistory) {
   const result = await chat.sendMessage(userMessage);
   return result.response.text();
 }
+
+// --- HELPER: RETRY LOGIC FOR 503 ERRORS ---
+async function processCoreAIRequestWithRetry(userMessage, currentHistory, retries = 2) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await processCoreAIRequest(userMessage, currentHistory);
+    } catch (error) {
+      if ((error.status === 503 || (error.message && error.message.includes("503"))) && attempt < retries) {
+        console.warn(`Gemini 503 Overload detected. Retrying attempt ${attempt + 1}/${retries}...`);
+        await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2 seconds
+      } else {
+        throw error; 
+      }
+    }
+  }
+}
+
+// --- HELPER: TEXT CHUNKER FOR DISCORD LIMITS ---
+function splitMessage(text, maxLength = 1950) {
+  const chunks = [];
+  while (text.length > 0) {
+    if (text.length <= maxLength) {
+      chunks.push(text);
+      break;
+    }
+    let chunkEnd = text.lastIndexOf('\n', maxLength);
+    if (chunkEnd === -1 || chunkEnd === 0) {
+      chunkEnd = text.lastIndexOf(' ', maxLength);
+    }
+    if (chunkEnd === -1 || chunkEnd === 0) {
+      chunkEnd = maxLength;
+    }
+    chunks.push(text.slice(0, chunkEnd));
+    text = text.slice(chunkEnd).trim();
+  }
+  return chunks;
+}
+
 
 // --- AUTHENTICATION ROUTES ---
 app.post("/signup", async (req, res) => {
@@ -248,7 +286,8 @@ app.post("/chat", authenticateToken, async (req, res) => {
       currentHistory = guestMemoryMap.get(sessionId);
     }
 
-    const botReply = await processCoreAIRequest(message, currentHistory);
+    // Notice we use the standard function here, as web UI doesn't need Discord chunking or Discord webhook replies
+    const botReply = await processCoreAIRequestWithRetry(message, currentHistory);
 
     if (!isGuest) {
       await pool.query("INSERT INTO messages (user_id, session_id, role, content) VALUES ($1, $2, $3, $4)", [req.user.id, sessionId, "user", message]);
@@ -319,7 +358,6 @@ app.post("/api/update-limit", async (req, res) => {
 // --- DISCORD BOT INTEGRATION (SERVERLESS) ---
 // ==========================================
 
-// 1. One-time route to register the /ask command to your Discord server
 app.get("/api/discord/register", async (req, res) => {
   const appId = process.env.DISCORD_APP_ID;
   const token = process.env.DISCORD_TOKEN;
@@ -332,7 +370,7 @@ app.get("/api/discord/register", async (req, res) => {
     options: [{
       name: "question",
       description: "The question you want to ask",
-      type: 3, // String type
+      type: 3, 
       required: true
     }]
   };
@@ -353,13 +391,11 @@ app.get("/api/discord/register", async (req, res) => {
   }
 });
 
-// 2. The main webhook listener for Discord
 app.post("/api/discord", async (req, res) => {
   const signature = req.headers["x-signature-ed25519"];
   const timestamp = req.headers["x-signature-timestamp"];
   const rawBody = req.rawBody;
 
-  // Security Verification (Mandatory for Discord)
   if (!signature || !timestamp || !rawBody) {
       return res.status(401).send("Missing signatures");
   }
@@ -371,16 +407,13 @@ app.post("/api/discord", async (req, res) => {
 
   const interaction = req.body;
 
-  // --- CRITICAL FIX 1: Handle Discord PING for verification ---
   if (interaction.type === 1) {
     return res.json({ type: 1 });
   }
 
-  // --- CRITICAL FIX 2: Handle the /ask command with Deferred method ---
   if (interaction.type === 2 && interaction.data.name === "ask") {
     
     // STEP A: IMMEDIATELY ACKNOWLEDGE (Type 5 = Deferred)
-    // This stops the 3-second timeout and shows "Bot is thinking..."
     res.json({ type: 5 }); 
 
     const userMessage = interaction.data.options[0].value;
@@ -388,17 +421,28 @@ app.post("/api/discord", async (req, res) => {
     
     // STEP B: PROCESS AI IN BACKGROUND & PUSH TO DISCORD
     try {
-      const botReply = await processCoreAIRequest(userMessage, []);
+      // Use the retry wrapper function here
+      const botReply = await processCoreAIRequestWithRetry(userMessage, []);
       const fullResponse = `**${userName} asked:** "${userMessage}"\n\n${botReply}`;
 
-      // Use the Discord Webhook API to edit the "thinking" message with the final answer
+      // Split the response into safe ~1950 character chunks
+      const messageChunks = splitMessage(fullResponse);
+
+      // 1. Edit the original "thinking..." message with Chunk 1
       await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ content: fullResponse })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: messageChunks[0] })
       });
+
+      // 2. If there are extra chunks, send them as follow-up messages sequentially
+      for (let i = 1; i < messageChunks.length; i++) {
+        await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${interaction.token}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: messageChunks[i] })
+        });
+      }
       
     } catch (error) {
       console.error("Discord AI Error:", error);
@@ -413,10 +457,12 @@ app.post("/api/discord", async (req, res) => {
                   waitTime = retryInfo.retryDelay.replace('s', '') + " seconds";
               }
           }
-          errorMessage = `⏳ The AI is currently busy. Please wait ${waitTime} and try again.`;
+          errorMessage = `⏳ Light Revealed is currently busy. Please wait ${waitTime} and try again.`;
+      } 
+      else if (error.status === 503 || (error.message && error.message.includes("503"))) {
+          errorMessage = "🔥 Light Revealed is now having high volume of requests. Please try asking again in a few seconds.";
       }
 
-      // Update the deferred message with the error
       await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
         method: 'PATCH',
         headers: {
@@ -427,7 +473,6 @@ app.post("/api/discord", async (req, res) => {
     }
   }
 });
-
 
 buildMasterBrain().then(() => {
   console.log("\n✨ LIGHT REVEALED CLOUD ENGINE OPERATIONAL ✨");
