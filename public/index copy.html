@@ -1,0 +1,838 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Light Revealed Chatbot</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-sidebar: #0a0912;
+        --bg-main: #0e0e16;
+        --bg-input: #1a1923;
+        --text-main: #ececec;
+        --text-muted: #b4b4b4;
+        --accent: #3b82f6;
+        --border: #333333;
+      }
+
+      * {
+        box-sizing: border-box;
+        font-family: "Inter", sans-serif;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        display: flex;
+        height: 100vh;
+        background-color: var(--bg-main);
+        color: var(--text-main);
+      }
+
+      /* --- SIDEBAR & SEARCH --- */
+      /* WIDENED SIDEBAR: Changed from 260px to 300px */
+      .sidebar {
+        width: 350px;
+        background-color: var(--bg-sidebar);
+        display: flex;
+        flex-direction: column;
+        border-right: 1px solid var(--border);
+        padding: 15px;
+      }
+
+      /* MODERNIZED NEW CHAT BUTTON */
+      .new-chat-btn {
+        background: linear-gradient(
+          135deg,
+          rgba(255, 255, 255, 0.03) 0%,
+          rgba(255, 255, 255, 0) 100%
+        );
+        color: var(--text-main);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        padding: 12px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        text-align: left;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        margin-bottom: 15px;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+      }
+      .new-chat-btn:hover {
+        background: linear-gradient(
+          135deg,
+          rgba(255, 255, 255, 0.08) 0%,
+          rgba(255, 255, 255, 0.02) 100%
+        );
+        border-color: rgba(255, 255, 255, 0.2);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+      }
+      .new-chat-btn:active {
+        transform: translateY(0);
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+      }
+
+      .search-container {
+        margin-bottom: 15px;
+      }
+      .search-container input {
+        width: 100%;
+        background-color: var(--bg-input);
+        color: var(--text-main);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 10px 12px;
+        font-size: 13px;
+        outline: none;
+        transition: border-color 0.2s;
+      }
+      .search-container input:focus {
+        border-color: var(--text-muted);
+      }
+
+      .history-label {
+        font-size: 12px;
+        color: var(--text-muted);
+        font-weight: 600;
+        margin-bottom: 10px;
+        padding-left: 5px;
+      }
+
+      .history-list {
+        flex: 1;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+      .history-item {
+        padding: 10px;
+        font-size: 13px;
+        color: var(--text-main);
+        border-radius: 6px;
+        cursor: pointer;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        transition: background 0.2s;
+      }
+      .history-item:hover {
+        background-color: rgba(255, 255, 255, 0.1);
+      }
+      .history-item.active {
+        background-color: var(--bg-input);
+        border-left: 3px solid var(--accent);
+      }
+
+      /* Profile Block */
+      .profile-section {
+        margin-top: auto;
+        padding-top: 15px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .profile-info {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 14px;
+        font-weight: 500;
+      }
+      .profile-avatar {
+        width: 32px;
+        height: 32px;
+        background-color: #5436da;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        font-weight: bold;
+      }
+
+      /* MODERNIZED SIGN IN/OUT BUTTON */
+      .auth-btn {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: var(--text-main);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        padding: 6px 12px;
+        border-radius: 20px;
+        transition: all 0.2s ease;
+      }
+      .auth-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(255, 255, 255, 0.2);
+        transform: scale(1.05);
+      }
+
+      /* --- MAIN CHAT AREA --- */
+      .main-content {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+      }
+      .header {
+        padding: 15px 20px;
+        font-weight: 600;
+        color: var(--text-muted);
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        justify-content: center;
+      }
+      .chat-container {
+        flex: 1;
+        overflow-y: auto;
+        padding: 40px 0;
+        display: flex;
+        flex-direction: column;
+        scroll-behavior: smooth;
+      }
+
+      .message-row {
+        padding: 24px 20px;
+        display: flex;
+        justify-content: center;
+      }
+      .message-row.user {
+        background-color: transparent;
+      }
+      .message-row.bot {
+        background-color: rgba(255, 255, 255, 0.02);
+        border-top: 1px solid var(--border);
+        border-bottom: 1px solid var(--border);
+      }
+      .message-content {
+        max-width: 800px;
+        width: 100%;
+        display: flex;
+        gap: 20px;
+        line-height: 1.6;
+        font-size: 15px;
+      }
+
+      .avatar {
+        width: 30px;
+        height: 30px;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        font-size: 14px;
+        flex-shrink: 0;
+      }
+      .user .avatar {
+        background-color: #5436da;
+      }
+      .bot .avatar {
+        background-color: transparent;
+      }
+      .text-wrapper {
+        flex: 1;
+        min-width: 0;
+        white-space: pre-wrap;
+      }
+
+      /* --- ANIMATIONS --- */
+      .message-row.bot .text-wrapper {
+        animation: fadeIn 0.5s ease-in-out;
+      }
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(5px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .typing-indicator {
+        color: var(--text-muted);
+        font-size: 14px;
+        font-style: italic;
+      }
+      .typing-indicator::after {
+        content: "Thinking";
+        animation: typingDots 1.5s infinite;
+      }
+      @keyframes typingDots {
+        0% {
+          content: "Thinking";
+        }
+        25% {
+          content: "Thinking.";
+        }
+        50% {
+          content: "Thinking..";
+        }
+        75% {
+          content: "Thinking...";
+        }
+        100% {
+          content: "Thinking";
+        }
+      }
+
+      .thinking-logo img {
+        animation: pulse-rotate 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+      }
+      @keyframes pulse-rotate {
+        0% {
+          transform: scale(1) rotate(0deg);
+        }
+        50% {
+          transform: scale(1.1) rotate(180deg);
+        }
+        100% {
+          transform: scale(1) rotate(360deg);
+        }
+      }
+
+      /* --- RESPONSIVE INPUT AREA --- */
+      .input-container {
+        padding: 30px 20px;
+        display: flex;
+        justify-content: center;
+        background: linear-gradient(180deg, transparent, var(--bg-main) 20%);
+      }
+
+      /* Switched alignment to flex-end so the button stays at the bottom as the box grows */
+      .input-box {
+        max-width: 800px;
+        width: 100%;
+        position: relative;
+        display: flex;
+        align-items: flex-end;
+        background-color: var(--bg-input);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
+        transition: border-color 0.2s;
+      }
+      .input-box:focus-within {
+        border-color: #555;
+      }
+
+      /* Converted input to textarea styling */
+      textarea.main-input {
+        flex: 1;
+        background: transparent;
+        border: none;
+        padding: 16px 50px 16px 20px;
+        color: var(--text-main);
+        font-size: 15px;
+        outline: none;
+        resize: none;
+        min-height: 54px;
+        max-height: 200px;
+        overflow-y: auto;
+        line-height: 1.5;
+        font-family: inherit;
+      }
+
+      /* Pinned send button to the bottom right */
+      button.send-btn {
+        position: absolute;
+        bottom: 10px;
+        right: 12px;
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: 6px;
+        width: 32px;
+        height: 32px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s;
+      }
+      button.send-btn:hover {
+        background: #2563eb;
+        transform: scale(1.05);
+      }
+
+      /* --- AUTH MODAL --- */
+      .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.7);
+        display: none;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+        backdrop-filter: blur(4px);
+      }
+      .modal-content {
+        background: var(--bg-sidebar);
+        padding: 40px;
+        border-radius: 12px;
+        width: 100%;
+        max-width: 400px;
+        border: 1px solid var(--border);
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+        position: relative;
+      }
+      .modal-content h2 {
+        margin-bottom: 25px;
+        text-align: center;
+      }
+      .modal-close {
+        position: absolute;
+        top: 15px;
+        right: 15px;
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        font-size: 24px;
+        cursor: pointer;
+      }
+      .modal-input {
+        width: 100%;
+        background: var(--bg-input);
+        border: 1px solid var(--border);
+        color: white;
+        padding: 12px 15px;
+        border-radius: 6px;
+        margin-bottom: 15px;
+        font-size: 15px;
+        outline: none;
+      }
+      .modal-input:focus {
+        border-color: var(--accent);
+      }
+      .modal-btn {
+        width: 100%;
+        background: var(--accent);
+        color: white;
+        border: none;
+        padding: 12px;
+        border-radius: 6px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        margin-bottom: 15px;
+      }
+      .modal-btn:hover {
+        background: #2563eb;
+      }
+      .modal-toggle {
+        text-align: center;
+        font-size: 13px;
+        color: var(--text-muted);
+        cursor: pointer;
+      }
+      .modal-toggle:hover {
+        color: white;
+        text-decoration: underline;
+      }
+      #authError {
+        color: #ef4444;
+        font-size: 13px;
+        text-align: center;
+        margin-bottom: 15px;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="sidebar">
+      <button class="new-chat-btn" onclick="startNewChat()">+ New chat</button>
+
+      <div class="search-container">
+        <input
+          type="text"
+          id="searchInput"
+          placeholder="Search history..."
+          onkeyup="filterHistory()"
+        />
+      </div>
+
+      <div class="history-label">Message History</div>
+      <div class="history-list" id="historyList"></div>
+
+      <div class="profile-section">
+        <div class="profile-info" id="profileInfo">
+          <div class="profile-avatar">G</div>
+          <span id="usernameDisplay">Guest Mode</span>
+        </div>
+        <button class="auth-btn" id="authActionBtn" onclick="openAuthModal()">
+          Sign In
+        </button>
+      </div>
+    </div>
+
+    <div class="main-content">
+      <div class="header">Light Revealed Chatbot</div>
+      <div class="chat-container" id="chat-container"></div>
+      <div class="input-container">
+        <div class="input-box">
+          <textarea
+            id="userInput"
+            class="main-input"
+            placeholder="Message Light Revealed..."
+            rows="1"
+          ></textarea>
+          <button class="send-btn" onclick="sendMessage()">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="authModal">
+      <div class="modal-content">
+        <button class="modal-close" onclick="closeAuthModal()">&times;</button>
+        <h2 id="modalTitle">Sign In</h2>
+        <div id="authError"></div>
+        <input
+          type="text"
+          id="authUsername"
+          class="modal-input"
+          placeholder="Username"
+        />
+        <input
+          type="password"
+          id="authPassword"
+          class="modal-input"
+          placeholder="Password"
+        />
+        <button class="modal-btn" id="authSubmitBtn" onclick="handleAuth()">
+          Sign In
+        </button>
+        <div class="modal-toggle" id="authToggleBtn" onclick="toggleAuthMode()">
+          Don't have an account? Sign Up
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const chatContainer = document.getElementById("chat-container");
+      const inputField = document.getElementById("userInput");
+      const historyList = document.getElementById("historyList");
+
+      // --- TEXTAREA AUTO-EXPAND LOGIC ---
+      inputField.addEventListener("input", function () {
+        this.style.height = "auto"; // Reset height briefly to recalculate
+        this.style.height = this.scrollHeight + "px"; // Set to required scroll height
+      });
+
+      // Handle Enter (Send) vs Shift+Enter (New Line)
+      inputField.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault(); // Prevents a new line from being added when sending
+          sendMessage();
+        }
+      });
+
+      let token = localStorage.getItem("token");
+      let username = localStorage.getItem("username");
+      let isLoginMode = true;
+      let currentSessionId = generateSessionId();
+
+      function generateSessionId() {
+        return (
+          "session_" +
+          Date.now().toString(36) +
+          Math.random().toString(36).substr(2, 5)
+        );
+      }
+
+      function init() {
+        updateProfileUI();
+        startNewChat();
+        if (token) fetchSidebarSessions();
+      }
+
+      function updateProfileUI() {
+        const nameDisplay = document.getElementById("usernameDisplay");
+        const avatar = document.querySelector(".profile-avatar");
+        const actionBtn = document.getElementById("authActionBtn");
+
+        if (token && username) {
+          nameDisplay.innerText = username;
+          avatar.innerText = username.charAt(0).toUpperCase();
+          actionBtn.innerText = "Sign Out";
+          actionBtn.onclick = logout;
+        } else {
+          nameDisplay.innerText = "Guest Mode";
+          avatar.innerText = "G";
+          actionBtn.innerText = "Sign In";
+          actionBtn.onclick = openAuthModal;
+        }
+      }
+
+      function startNewChat() {
+        currentSessionId = generateSessionId();
+        chatContainer.innerHTML = "";
+        document
+          .querySelectorAll(".history-item")
+          .forEach((el) => el.classList.remove("active"));
+        if (!token)
+          renderMessage("স্বাগতম! আপনি অতিথি হিসেবে ব্যবহার করছেন।", "bot");
+      }
+
+      async function fetchSidebarSessions() {
+        if (!token) return;
+        try {
+          const res = await fetch("http://localhost:3000/sessions", {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const data = await res.json();
+
+          historyList.innerHTML = "";
+          if (data.sessions && data.sessions.length > 0) {
+            data.sessions.forEach((session) => {
+              const div = document.createElement("div");
+              div.className = "history-item";
+              div.innerText = session.title;
+              div.onclick = () => loadSpecificChat(session.session_id, div);
+              historyList.appendChild(div);
+            });
+          }
+        } catch (e) {
+          console.error("Failed to load sessions.");
+        }
+      }
+
+      async function loadSpecificChat(sessionId, clickedElement) {
+        currentSessionId = sessionId;
+        chatContainer.innerHTML = "";
+        document
+          .querySelectorAll(".history-item")
+          .forEach((el) => el.classList.remove("active"));
+        if (clickedElement) clickedElement.classList.add("active");
+
+        try {
+          const res = await fetch(
+            `http://localhost:3000/history/${sessionId}`,
+            { headers: { Authorization: `Bearer ${token}` } },
+          );
+          const data = await res.json();
+          if (data.history && data.history.length > 0) {
+            data.history.forEach((msg) => {
+              renderMessage(msg.content, msg.role, null, true);
+            });
+          }
+        } catch (e) {
+          console.error("Failed to load chat history.");
+        }
+      }
+
+      function filterHistory() {
+        const query = document
+          .getElementById("searchInput")
+          .value.toLowerCase();
+        const items = document.querySelectorAll(".history-item");
+        items.forEach((item) => {
+          const text = item.innerText.toLowerCase();
+          item.style.display = text.includes(query) ? "block" : "none";
+        });
+      }
+
+      function openAuthModal() {
+        document.getElementById("authModal").style.display = "flex";
+      }
+      function closeAuthModal() {
+        document.getElementById("authModal").style.display = "none";
+        document.getElementById("authError").style.display = "none";
+      }
+
+      function toggleAuthMode() {
+        isLoginMode = !isLoginMode;
+        document.getElementById("modalTitle").innerText = isLoginMode
+          ? "Sign In"
+          : "Create Account";
+        document.getElementById("authSubmitBtn").innerText = isLoginMode
+          ? "Sign In"
+          : "Sign Up";
+        document.getElementById("authToggleBtn").innerText = isLoginMode
+          ? "Don't have an account? Sign Up"
+          : "Already have an account? Sign In";
+        document.getElementById("authError").style.display = "none";
+      }
+
+      async function handleAuth() {
+        const u = document.getElementById("authUsername").value.trim();
+        const p = document.getElementById("authPassword").value.trim();
+        const errorDiv = document.getElementById("authError");
+
+        if (!u || !p) {
+          errorDiv.innerText = "Please enter both fields.";
+          errorDiv.style.display = "block";
+          return;
+        }
+
+        const endpoint = isLoginMode ? "/login" : "/signup";
+        try {
+          const res = await fetch(`http://localhost:3000${endpoint}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: u, password: p }),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            token = data.token;
+            username = data.username;
+            localStorage.setItem("token", token);
+            localStorage.setItem("username", username);
+            closeAuthModal();
+            updateProfileUI();
+            fetchSidebarSessions();
+            startNewChat();
+          } else {
+            errorDiv.innerText = data.error;
+            errorDiv.style.display = "block";
+          }
+        } catch (e) {
+          errorDiv.innerText = "Connection error.";
+          errorDiv.style.display = "block";
+        }
+      }
+
+      function logout() {
+        token = null;
+        username = null;
+        localStorage.removeItem("token");
+        localStorage.removeItem("username");
+        updateProfileUI();
+        historyList.innerHTML = "";
+        startNewChat();
+      }
+
+      async function sendMessage() {
+        const text = inputField.value.trim();
+        if (!text) return;
+
+        renderMessage(text, "user");
+        inputField.value = "";
+        inputField.style.height = "auto"; // Reset textarea height after sending
+
+        const typingId = "typing-" + Date.now();
+        renderMessage("Thinking...", "bot", typingId);
+
+        try {
+          const res = await fetch("http://localhost:3000/chat", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: token ? `Bearer ${token}` : "",
+            },
+            body: JSON.stringify({
+              message: text,
+              sessionId: currentSessionId,
+            }),
+          });
+          const data = await res.json();
+
+          document.getElementById(typingId).remove();
+          animateBotReply(data.reply);
+
+          if (
+            token &&
+            document.querySelectorAll(".history-item").length === 0
+          ) {
+            fetchSidebarSessions();
+          }
+        } catch (error) {
+          document.getElementById(typingId).remove();
+          renderMessage("সংযোগ ত্রুটি। সার্ভার কি চালু আছে?", "bot");
+        }
+      }
+
+      function renderMessage(text, sender, id = null, instant = false) {
+        const row = document.createElement("div");
+        row.className = `message-row ${sender}`;
+        if (id) row.id = id;
+
+        const isTyping = text === "Thinking..." ? "typing-indicator" : "";
+        const isThinkingLogo = text === "Thinking..." ? "thinking-logo" : "";
+        const displayText = isTyping ? "" : text;
+
+        let avatarContent = "";
+        if (sender === "user") {
+          const initial = username ? username.charAt(0).toUpperCase() : "G";
+          avatarContent = `<div class="avatar">${initial}</div>`;
+        } else {
+          avatarContent = `<div class="avatar bot-avatar ${isThinkingLogo}"><img src="logo.png" style="width: 100%; border-radius: 4px; display: block;"></div>`;
+        }
+
+        row.innerHTML = `
+            <div class="message-content">
+                ${avatarContent}
+                <div class="text-wrapper ${isTyping}">${displayText}</div>
+            </div>
+        `;
+        chatContainer.appendChild(row);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        return row;
+      }
+
+      function animateBotReply(fullText) {
+        const row = document.createElement("div");
+        row.className = "message-row bot";
+
+        const contentBox = document.createElement("div");
+        contentBox.className = "message-content";
+
+        const avatar = document.createElement("div");
+        avatar.className = "avatar bot-avatar";
+        avatar.innerHTML =
+          '<img src="logo.png" style="width: 100%; border-radius: 4px; display: block;">';
+
+        const textWrapper = document.createElement("div");
+        textWrapper.className = "text-wrapper";
+
+        contentBox.appendChild(avatar);
+        contentBox.appendChild(textWrapper);
+        row.appendChild(contentBox);
+        chatContainer.appendChild(row);
+
+        const words = fullText.split(" ");
+        let currentIndex = 0;
+
+        const interval = setInterval(() => {
+          if (currentIndex < words.length) {
+            textWrapper.innerText +=
+              (currentIndex === 0 ? "" : " ") + words[currentIndex];
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            currentIndex++;
+          } else {
+            clearInterval(interval);
+            if (token) fetchSidebarSessions();
+          }
+        }, 30);
+      }
+
+      init();
+    </script>
+  </body>
+</html>
