@@ -17,7 +17,9 @@
       }
 
       * { box-sizing: border-box; font-family: "Inter", sans-serif; margin: 0; padding: 0; }
-      body { display: flex; height: 100vh; background-color: var(--bg-main); color: var(--text-main); overflow: hidden; }
+      
+      /* FIXED HEIGHT FOR MOBILE (100dvh instead of 100vh) */
+      body { display: flex; height: 100dvh; background-color: var(--bg-main); color: var(--text-main); overflow: hidden; }
 
       .sidebar {
         width: 350px;
@@ -30,20 +32,15 @@
       }
 
       .close-sidebar-btn {
-    display: none; /* Hidden on desktop */
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    font-size: 20px;
-    cursor: pointer;
-    align-self: flex-end;
-    margin-bottom: 15px;
-}
-@media (max-width: 768px) {
-    .close-sidebar-btn {
-        display: block; /* Show only on phones */
-    }
-}
+        display: none; 
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        font-size: 20px;
+        cursor: pointer;
+        align-self: flex-end;
+        margin-bottom: 15px;
+      }
 
       .new-chat-btn {
         background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0) 100%);
@@ -82,10 +79,9 @@
       .header { padding: 15px 20px; font-weight: 600; color: var(--text-muted); border-bottom: 1px solid var(--border); display: flex; justify-content: center; position: relative; }
       .chat-container { flex: 1; overflow-y: auto; padding: 40px 0; display: flex; flex-direction: column; scroll-behavior: smooth; }
 
-      /* CLEAN UI EDITS HERE */
       .message-row { padding: 24px 20px; display: flex; justify-content: center; border: none !important; }
       .message-row.user { background-color: transparent; }
-      .message-row.bot { background-color: rgba(255, 255, 255, 0.03); } /* Subtle background */
+      .message-row.bot { background-color: rgba(255, 255, 255, 0.03); } 
       
       .message-content { max-width: 800px; width: 100%; display: flex; gap: 20px; line-height: 1.6; font-size: 15px; }
       .avatar { width: 30px; height: 30px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; flex-shrink: 0; }
@@ -100,7 +96,7 @@
       textarea.main-input { flex: 1; background: transparent; border: none; padding: 16px 50px 16px 20px; color: var(--text-main); font-size: 15px; outline: none; resize: none; min-height: 54px; max-height: 200px; overflow-y: auto; line-height: 1.5; }
       button.send-btn { position: absolute; bottom: 10px; right: 12px; background: var(--accent); color: white; border: none; border-radius: 6px; width: 32px; height: 32px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 
-      /* --- MOBILE SLIDE-IN FIXES --- */
+      /* --- MOBILE SLIDE-IN FIXES & PADDING --- */
       .menu-btn { display: none; background: none; border: none; color: var(--text-main); font-size: 24px; cursor: pointer; position: absolute; left: 20px; top: 10px; }
       .mobile-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.6); z-index: 999; }
       
@@ -109,6 +105,10 @@
         .sidebar { position: fixed; left: -350px; height: 100%; transition: left 0.3s ease; }
         .sidebar.open { left: 0; }
         .mobile-overlay.open { display: block; }
+        .close-sidebar-btn { display: block; }
+        
+        /* ADDED PADDING TO FIX MOBILE CUTOFF */
+        .input-container { padding: 15px 15px 25px 15px; }
       }
 
       /* Modals */
@@ -124,8 +124,7 @@
   <body>
     
    <div class="sidebar">
-  <!-- NEW CLOSE BUTTON FOR MOBILE -->
-  <button class="close-sidebar-btn" onclick="toggleSidebar()">✕</button>
+      <button class="close-sidebar-btn" onclick="toggleSidebar()">✕</button>
       <button class="new-chat-btn" onclick="startNewChat()">+ New chat</button>
       <div class="search-container">
         <input type="text" id="searchInput" placeholder="Search history..." onkeyup="filterHistory()" />
@@ -233,7 +232,6 @@
         document.querySelectorAll(".history-item").forEach((el) => el.classList.remove("active"));
         if (!token) renderMessage("স্বাগতম! আপনি অতিথি হিসেবে ব্যবহার করছেন।", "bot");
         
-        // Auto-close sidebar on mobile when starting a new chat
         document.querySelector('.sidebar').classList.remove('open');
         document.getElementById('mobileOverlay').classList.remove('open');
       }
@@ -251,7 +249,6 @@
               div.innerText = session.title;
               div.onclick = () => {
                   loadSpecificChat(session.session_id, div);
-                  // Close sidebar on mobile after selection
                   document.querySelector('.sidebar').classList.remove('open');
                   document.getElementById('mobileOverlay').classList.remove('open');
               };
