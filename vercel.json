@@ -14,5 +14,5 @@
     { "source": "/chat", "destination": "/server.js" },
     { "source": "/api/(.*)", "destination": "/server.js" },
     { "source": "/admin.html", "destination": "/server.js" }
-]
+  ]
 }
