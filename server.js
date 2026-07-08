@@ -6,10 +6,17 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { Pool } = require("pg");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const { verifyKey } = require("discord-interactions"); // <-- NEW DISCORD IMPORT
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+
+// --- CRITICAL DISCORD UPDATE: Captures raw body for security verification ---
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf; 
+  }
+}));
 
 // --- RESTORED ORIGINAL WORKING ROUTES ---
 app.use(express.static(path.join(__dirname, 'public')));
@@ -299,6 +306,100 @@ app.post("/api/update-limit", async (req, res) => {
     res.status(500).json({ error: "Failed to update limit" });
   }
 });
+
+
+// ==========================================
+// --- DISCORD BOT INTEGRATION (SERVERLESS) ---
+// ==========================================
+
+// 1. One-time route to register the /ask command to your Discord server
+app.get("/api/discord/register", async (req, res) => {
+  const appId = process.env.DISCORD_APP_ID;
+  const token = process.env.DISCORD_TOKEN;
+  
+  if (!appId || !token) return res.status(400).json({ error: "Missing Discord Environment Variables" });
+
+  const commandData = {
+    name: "ask",
+    description: "Ask Light Revealed a question",
+    options: [{
+      name: "question",
+      description: "The question you want to ask",
+      type: 3, // String type
+      required: true
+    }]
+  };
+
+  try {
+    const response = await fetch(`https://discord.com/api/v10/applications/${appId}/commands`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bot ${token}`
+      },
+      body: JSON.stringify(commandData)
+    });
+    const data = await response.json();
+    res.json({ success: true, message: "Command registered to Discord!", data });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 2. The main webhook listener for Discord
+app.post("/api/discord", async (req, res) => {
+  const signature = req.headers["x-signature-ed25519"];
+  const timestamp = req.headers["x-signature-timestamp"];
+  const rawBody = req.rawBody;
+
+  // Security Verification (Mandatory for Discord)
+  if (!signature || !timestamp || !rawBody) {
+      return res.status(401).send("Missing signatures");
+  }
+
+  const isValid = verifyKey(rawBody, signature, timestamp, process.env.DISCORD_PUBLIC_KEY);
+  if (!isValid) {
+      return res.status(401).send("Bad request signature");
+  }
+
+  const interaction = req.body;
+
+  // Handle Discord's mandatory initial setup Ping
+  if (interaction.type === 1) {
+    return res.json({ type: 1 });
+  }
+
+  // Handle the /ask command
+  if (interaction.type === 2 && interaction.data.name === "ask") {
+    const userMessage = interaction.data.options[0].value;
+    
+    // IMMEDIATELY return a "Deferred" response. 
+    // This satisfies Discord's strict 3-second rule and shows "Light Revealed is thinking..."
+    res.json({ type: 5 }); 
+
+    // Run the AI generation in the background
+    try {
+      // Get AI response (using empty history for single slash-command questions)
+      const botReply = await processCoreAIRequest(userMessage, []);
+
+      // Send the completed answer back to edit the "thinking..." message
+      await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: botReply })
+      });
+      
+    } catch (error) {
+      console.error("Discord AI Error:", error);
+      await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "⚠️ An error occurred while contacting the Truth Engine." })
+      });
+    }
+  }
+});
+
 
 buildMasterBrain().then(() => {
   console.log("\n✨ LIGHT REVEALED CLOUD ENGINE OPERATIONAL ✨");
