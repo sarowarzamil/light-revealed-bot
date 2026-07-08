@@ -387,12 +387,28 @@ app.post("/api/discord", async (req, res) => {
       
     } catch (error) {
       console.error("Discord AI Error:", error);
-      // Send error message directly back
+      
+      let errorMessage = "⚠️ An error occurred while contacting the Truth Engine.";
+      
+      // Check if it's the specific Google 429 API Rate Limit error
+      if (error.status === 429 || (error.message && error.message.includes("429"))) {
+          
+          // Try to extract the retry delay from the error details
+          let waitTime = "a few seconds"; // Default
+          if (error.errorDetails) {
+              const retryInfo = error.errorDetails.find(d => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo');
+              if (retryInfo && retryInfo.retryDelay) {
+                  // retryDelay comes in as "9s" or "600s"
+                  waitTime = retryInfo.retryDelay.replace('s', '') + " seconds";
+              }
+          }
+          
+          errorMessage = `⏳ The AI is currently busy. Please wait ${waitTime} and try again.`;
+      }
+
       return res.json({ 
         type: 4, 
-        data: {
-            content: "⚠️ An error occurred while contacting the Truth Engine."
-        }
+        data: { content: errorMessage }
       });
     }
   }
