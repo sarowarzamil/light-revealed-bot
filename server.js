@@ -364,24 +364,23 @@ app.post("/api/discord", async (req, res) => {
 
   const interaction = req.body;
 
-  // Handle Discord's mandatory initial setup Ping
-  if (interaction.type === 1) {
-    return res.json({ type: 1 });
-  }
-
-  // Handle the /ask command
+// Handle the /ask command
   if (interaction.type === 2 && interaction.data.name === "ask") {
     const userMessage = interaction.data.options[0].value;
+    const userName = interaction.member.user.username; // Capture the Discord username
     
     try {
       // Wait for the AI to generate the answer FIRST (Forces Vercel to stay awake)
       const botReply = await processCoreAIRequest(userMessage, []);
 
+      // Format: Echo the user's question, then show the AI reply
+      const fullResponse = `**${userName} asked:** "${userMessage}"\n\n${botReply}`;
+
       // Send the completed answer instantly to Discord (Type 4 = Immediate Message)
       return res.json({ 
         type: 4, 
         data: {
-            content: botReply
+            content: fullResponse
         }
       });
       
