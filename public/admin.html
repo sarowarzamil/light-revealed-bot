@@ -4,212 +4,134 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Light Revealed - Admin Control</title>
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
-      rel="stylesheet"
-    />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
     <style>
       :root {
-        --bg-main: #171717;
-        --bg-card: #212121;
-        --bg-input: #2f2f2f;
-        --text-main: #ececec;
-        --text-muted: #b4b4b4;
-        --accent-blue: #3b82f6;
-        --accent-orange: #ff4a00;
-        --accent-red: #ef4444;
-        --border: #333333;
+        --bg-main: #171717; --bg-card: #212121; --bg-input: #2f2f2f; --text-main: #ececec;
+        --text-muted: #b4b4b4; --accent-blue: #3b82f6; --accent-orange: #ff4a00; --border: #333333;
       }
-      * {
-        box-sizing: border-box;
-        font-family: "Inter", sans-serif;
-        margin: 0;
-        padding: 0;
-      }
-      body {
-        background-color: var(--bg-main);
-        color: var(--text-main);
-        padding: 40px 20px;
-        display: flex;
-        justify-content: center;
-      }
-      .admin-container {
-        max-width: 800px;
-        width: 100%;
-        background-color: var(--bg-card);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 30px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-      }
-      h1 {
-        font-size: 24px;
-        font-weight: 600;
-        margin-bottom: 8px;
-      }
-      .subtitle {
-        font-size: 14px;
-        color: var(--text-muted);
-        margin-bottom: 30px;
-      }
-
-      .section-label {
-        font-size: 14px;
-        font-weight: 600;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        margin-bottom: 12px;
-        margin-top: 30px;
-      }
-
-      textarea {
-        width: 100%;
-        background-color: var(--bg-input);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 16px;
-        color: var(--text-main);
-        font-size: 14px;
-        outline: none;
-        min-height: 250px;
-        resize: vertical;
-        line-height: 1.5;
-        margin-bottom: 15px;
-      }
-      textarea:focus {
-        border-color: #555;
-      }
-
-      button {
-        border: none;
-        border-radius: 8px;
-        font-size: 15px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: opacity 0.2s;
-        color: white;
-      }
-      button:hover {
-        opacity: 0.9;
-      }
-      .btn-save {
-        background-color: #10b981;
-        padding: 12px 24px;
-        display: block;
-        width: 100%;
-        margin-bottom: 10px;
-        font-weight: bold;
-      }
-      .btn-sync {
-        background-color: var(--accent-orange);
-        width: 100%;
-        padding: 16px;
-        font-size: 16px;
-        font-weight: 600;
-        margin-top: 10px;
-        box-shadow: 0 4px 12px rgba(255, 74, 0, 0.2);
-      }
-
-      #status {
-        margin-top: 20px;
-        font-weight: 500;
-        text-align: center;
-        font-size: 14px;
-        padding: 12px;
-        border-radius: 6px;
-        display: none;
-      }
+      * { box-sizing: border-box; font-family: "Inter", sans-serif; margin: 0; padding: 0; }
+      body { background-color: var(--bg-main); color: var(--text-main); padding: 40px 20px; display: flex; justify-content: center; }
+      .admin-container { max-width: 800px; width: 100%; background-color: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
+      h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+      .subtitle { font-size: 14px; color: var(--text-muted); margin-bottom: 30px; }
+      .section-label { font-size: 14px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 12px; margin-top: 30px; }
+      textarea { width: 100%; background-color: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 16px; color: var(--text-main); min-height: 150px; resize: vertical; margin-bottom: 15px; }
+      button { border: none; border-radius: 8px; font-size: 15px; font-weight: 500; cursor: pointer; transition: opacity 0.2s; color: white; }
+      button:hover { opacity: 0.9; }
+      .btn-save { background-color: #10b981; padding: 12px 24px; width: 100%; margin-bottom: 10px; font-weight: bold; }
+      .btn-sync { background-color: var(--accent-orange); width: 100%; padding: 16px; font-size: 16px; font-weight: 600; margin-top: 10px; }
+      #status { margin-top: 20px; text-align: center; font-size: 14px; padding: 12px; border-radius: 6px; display: none; }
+      
+      /* User Table Styles */
+      table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+      th, td { text-align: left; padding: 12px; border-bottom: 1px solid var(--border); }
+      th { color: var(--text-muted); font-weight: 500; }
+      .limit-input { width: 60px; background: var(--bg-input); border: 1px solid var(--border); color: white; padding: 6px; border-radius: 4px; }
+      .btn-small { background-color: var(--accent-blue); padding: 6px 12px; font-size: 12px; }
     </style>
   </head>
   <body>
     <div class="admin-container">
       <h1>Light Revealed Cloud Control</h1>
-      <div class="subtitle">
-        Manage AI personality rules and synchronize the Supabase engine.
-      </div>
+      <div class="subtitle">Manage AI personality rules and synchronize the Supabase engine.</div>
 
-      <div class="section-label">AI System Instructions & Persona</div>
-      <textarea
-        id="sysInstructionInput"
-        placeholder="Define the AI's personality and specific rules here..."
-      ></textarea>
-
-      <div class="section-label">Database Operations</div>
-      <button class="btn-save" onclick="saveSettingsToCloud()">
-        1. Save Configurations to Cloud
-      </button>
-      <button class="btn-sync" onclick="syncBrain()">
-        2. Reboot & Sync AI Engine
-      </button>
-
+      <div class="section-label">AI System Instructions</div>
+      <textarea id="sysInstructionInput" placeholder="Define the AI's personality..."></textarea>
+      <button class="btn-save" onclick="saveSettingsToCloud()">1. Save Configurations to Cloud</button>
+      <button class="btn-sync" onclick="syncBrain()">2. Reboot & Sync AI Engine</button>
+      
       <div id="status"></div>
+
+      <div class="section-label">User Limit Management</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Username</th>
+            <th>Today's Chats</th>
+            <th>Daily Limit</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="userTableBody">
+          </tbody>
+      </table>
     </div>
 
     <script>
-      // LOCK DOWN THE PAGE
-  const password = prompt("Enter Admin Password:");
-  if (password !== "shawon300") {
-      alert("Access Denied!");
-      window.location.href = "/"; // Redirects back home
-  }
-  
-  // ... rest of your existing code
+      const password = prompt("Enter Admin Password:");
+      if (password !== "shawon300") {
+          alert("Access Denied!");
+          window.location.href = "/";
+      }
+
       async function loadSettings() {
         const res = await fetch("/api/settings");
         const data = await res.json();
-        document.getElementById("sysInstructionInput").value =
-          data.systemInstruction || "";
+        document.getElementById("sysInstructionInput").value = data.systemInstruction || "";
       }
 
       async function saveSettingsToCloud() {
-        const instruction = document.getElementById(
-          "sysInstructionInput",
-        ).value;
+        const instruction = document.getElementById("sysInstructionInput").value;
         const statusEl = document.getElementById("status");
-
         try {
           await fetch("/api/settings", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
+            method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ systemInstruction: instruction }),
           });
-          statusEl.style.display = "block";
-          statusEl.style.backgroundColor = "rgba(16, 163, 127, 0.1)";
-          statusEl.style.color = "#10A37F";
-          statusEl.innerText = "Settings successfully saved to Supabase!";
+          statusEl.style.display = "block"; statusEl.style.backgroundColor = "rgba(16, 163, 127, 0.1)"; statusEl.style.color = "#10A37F";
+          statusEl.innerText = "Settings successfully saved!";
         } catch (e) {
-          statusEl.style.display = "block";
-          statusEl.style.backgroundColor = "rgba(239, 68, 68, 0.1)";
-          statusEl.style.color = "var(--accent-red)";
-          statusEl.innerText = "Failed to save settings to the cloud.";
+          statusEl.style.display = "block"; statusEl.style.backgroundColor = "rgba(239, 68, 68, 0.1)"; statusEl.style.color = "#ef4444";
+          statusEl.innerText = "Failed to save settings.";
         }
       }
 
       async function syncBrain() {
         const statusEl = document.getElementById("status");
-        statusEl.style.display = "block";
-        statusEl.style.backgroundColor = "rgba(59, 130, 246, 0.1)";
-        statusEl.style.color = "var(--accent-blue)";
+        statusEl.style.display = "block"; statusEl.style.backgroundColor = "rgba(59, 130, 246, 0.1)"; statusEl.style.color = "var(--accent-blue)";
         statusEl.innerText = "Syncing... Re-compiling document syllabus.";
-
         try {
           const res = await fetch("/api/sync", { method: "POST" });
           if (res.ok) {
-            statusEl.style.backgroundColor = "rgba(16, 163, 127, 0.1)";
-            statusEl.style.color = "#10A37F";
-            statusEl.innerText =
-              "Sync successful! The AI engine is fully operational with new logic.";
+            statusEl.style.backgroundColor = "rgba(16, 163, 127, 0.1)"; statusEl.style.color = "#10A37F";
+            statusEl.innerText = "Sync successful! AI engine fully operational.";
           } else throw new Error();
         } catch (e) {
-          statusEl.style.backgroundColor = "rgba(239, 68, 68, 0.1)";
-          statusEl.style.color = "var(--accent-red)";
-          statusEl.innerText =
-            "Sync tracking failure. Check your VS Code console.";
+          statusEl.style.backgroundColor = "rgba(239, 68, 68, 0.1)"; statusEl.style.color = "#ef4444";
+          statusEl.innerText = "Sync failure.";
         }
       }
 
+      async function loadUsers() {
+        try {
+          const res = await fetch("/api/users");
+          const users = await res.json();
+          const tbody = document.getElementById("userTableBody");
+          tbody.innerHTML = users.map(u => `
+            <tr>
+              <td>${u.username}</td>
+              <td>${u.daily_chat_count}</td>
+              <td><input type="number" id="limit-${u.id}" class="limit-input" value="${u.custom_limit}"></td>
+              <td><button class="btn-small" onclick="updateLimit(${u.id})">Update</button></td>
+            </tr>
+          `).join('');
+        } catch(e) { console.error("Failed to load users"); }
+      }
+
+      async function updateLimit(userId) {
+        const newLimit = document.getElementById(`limit-${userId}`).value;
+        try {
+          await fetch("/api/update-limit", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId, newLimit }),
+          });
+          alert("User limit updated successfully!");
+        } catch (e) { alert("Failed to update limit."); }
+      }
+
       loadSettings();
+      loadUsers();
     </script>
   </body>
 </html>
