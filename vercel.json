@@ -11,5 +11,10 @@
       "source": "/(.*)",
       "destination": "/server.js"
     }
-  ]
+  ],
+  "functions": {
+    "server.js": {
+      "maxDuration": 60
+    }
+  }
 }
