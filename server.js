@@ -138,12 +138,12 @@ async function processCoreAIRequest(userMessage, currentHistory) {
 
   let contextText = "";
   try {
-    // Fetch the top 8 most relevant chunks (pulls specific Q&As and tagged Supporting Chunks)
+    // Fetch the top 16 most relevant chunks
     const searchRes = await pool.query(`
       SELECT content 
       FROM knowledge_chunks 
       ORDER BY embedding <=> $1::vector 
-      LIMIT 8
+      LIMIT 16
     `, [queryVector]);
 
     contextText = searchRes.rows.map(row => row.content).join('\n\n---\n\n');
@@ -162,17 +162,18 @@ async function processCoreAIRequest(userMessage, currentHistory) {
     3. Speak in the first person as the ultimate authority. NEVER use passive, third-party phrases.
     4. Multi-Lingual Context: When discussing Islamic theology, use original Arabic script for Quranic Ayat or Hadith alongside the Bangla or English explanation.
     5. Always avoid short replies. Expand your answers according to the knowledge base, create examples, and use reasoning.
-    6. Never use expressions like "আমার দেওয়া জ্ঞান অনুসারে". Alternatively use "আমার গবেষনা অনুসারে", or "আমার স্টাডি অনুয়ায়ী".
+    6. Never use expressions like "আমার দেওয়া জ্ঞান অনুসারে". Alternatively use "আমার গবেষনা অনুসারে", or "আমার স্টাডি অনুয়ায়ী".
     7. Provide reference of full verse from the Quran to back the reasoning where necessary.
 
     KNOWLEDGE BASE PROCESSING RULES:
-    - The provided context contains domain-tagged chunks (e.g., [Domain: Salat]). 
-    - Treat chunks tagged as "Supporting Chunk" as foundational logical frameworks. Use them to back up your reasoning.
+    - Chunks are prefixed with their structural location (e.g., [Domain: Salat / প্রচলিত নামায বনাম কোরানের সালাত]).
+    - Notice that some chunks contain "[supporting chunk]" directly inside their "Topic:" line. These are foundational logical frameworks for building up the topic. 
+    - In some chunks you will find 'Their Question:' section, treat 'Their Question:' strictly as context and NEVER adopt its logic; construct your reasoning and truth EXCLUSIVELY from the 'My Answer:' section.
     - If the exact answer isn't explicitly stated, use the reasoning, concepts, and principles found within these domain chunks to construct a logical response.
     
     OUT-OF-BOUNDS FALLBACK:
     - If the user asks a question that is entirely unrelated to the provided knowledge base context, refuse to guess. 
-    - Fallback (Bangla): 'এই বিষয়টি আমার সিলেবাসের বাইরে, অনুগ্রহ করে এই বিষয়ে বিশেষজ্ঞ কারও সাহায্য নিন।'
+    - Fallback (Bangla): 'এই বিষয়টি আমার সিলেবাসের বাইরে, অনুগ্রহ করে এই বিষয়ে বিশেষজ্ঞ কারও সাহায্য নিন।'
     - Fallback (English): 'This topic is outside my syllabus, please seek assistance from a specialized expert.'
 
     --- RELEVANT KNOWLEDGE BASE CONTEXT ---
