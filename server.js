@@ -75,7 +75,7 @@ async function buildMasterBrain() {
       // ২. চাঙ্ক তৈরি করা
       const chunks = docText.split(/\n\s*\n/).map(c => c.trim()).filter(c => c.length >= 20); 
       
-      const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2-flash" });
+      const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
 
       console.log(`Total chunks to process: ${chunks.length}. Generating embeddings in parallel...`);
 
@@ -108,7 +108,7 @@ async function buildMasterBrain() {
 async function processCoreAIRequest(userMessage, currentHistory) {
   
   // A. Convert the user's question into a vector
-  const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2-flash" });
+  const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
   const embedResult = await embeddingModel.embedContent(userMessage);
   const queryVector = `[${embedResult.embedding.values.join(',')}]`;
 
