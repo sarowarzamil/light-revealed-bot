@@ -500,6 +500,7 @@ app.post("/api/discord", async (req, res) => {
   }
 });
 
+// >>>>> THIS IS THE SLASH COMMAND WORKER BLOCK YOU WERE LOOKING FOR <<<<<
 app.post("/api/discord/worker", async (req, res) => {
   const authHeader = req.headers['x-bot-auth'];
   if (authHeader !== (process.env.JWT_SECRET || 'fallback_secret')) {
@@ -531,7 +532,16 @@ app.post("/api/discord/worker", async (req, res) => {
 
   } catch (error) {
     console.error("Worker Error:", error);
+    
+    // 🔥 UPDATED: Beautiful error messages for Slash Commands 🔥
     let errorMessage = "⚠️ An error occurred while contacting the Truth Engine.";
+    
+    if (error.status === 429 || (error.message && error.message.includes("429"))) {
+        errorMessage = "⏳ Light Revealed is currently busy. Please wait a few moments and try again.";
+    } 
+    else if (error.status === 503 || (error.message && error.message.includes("503"))) {
+        errorMessage = "🔥 Light Revealed server is currently experiencing high demand. Please try again in a minute.";
+    }
 
     await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${token}/messages/@original`, {
       method: 'PATCH',
@@ -568,11 +578,9 @@ if (process.env.DISCORD_TOKEN) {
       return; // Ignores all other channels immediately
     }
 
-    // You can now allow users to either tag the bot OR just type directly in this channel!
     try {
       await message.channel.sendTyping();
       
-      // Clean out @mentions if they used one
       const userQuery = message.content.replace(/<@!?\d+>/g, '').trim();
       if (!userQuery) return;
 
@@ -582,9 +590,20 @@ if (process.env.DISCORD_TOKEN) {
       for (const chunk of chunks) {
         await message.reply(chunk);
       }
-    } catch (err) {
-      console.error("Discord Native Chat Error:", err);
-      await message.reply("⚠️ An error occurred while processing your request.");
+    } catch (error) {
+      console.error("Discord Native Chat Error:", error);
+      
+      // 🔥 UPDATED: Beautiful error messages for Native Chat 🔥
+      let errorMessage = "⚠️ An error occurred while processing your request.";
+      
+      if (error.status === 429 || (error.message && error.message.includes("429"))) {
+          errorMessage = "⏳ Light Revealed is currently busy. Please wait a few moments and try again.";
+      } 
+      else if (error.status === 503 || (error.message && error.message.includes("503"))) {
+          errorMessage = "🔥 Light Revealed server is currently experiencing high demand. Please try again in a minute.";
+      }
+
+      await message.reply(errorMessage);
     }
   });
 
