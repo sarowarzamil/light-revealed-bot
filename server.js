@@ -69,35 +69,35 @@ async function buildMasterBrain() {
       
       console.log("Google Doc Downloaded. Processing chunks...");
 
-      // Clear out the old knowledge base in the database
+      // ১. ডাটাবেজ ক্লিয়ার করা
       await pool.query("TRUNCATE TABLE knowledge_chunks");
 
-      // Split the document into paragraphs/chunks based on double line breaks
-      const chunks = docText.split(/\n\s*\n/); 
+      // ২. চাঙ্ক তৈরি করা
+      const chunks = docText.split(/\n\s*\n/).map(c => c.trim()).filter(c => c.length >= 20); 
       
-      const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+      const embeddingModel = genAI.getGenerativeModel({ model: "embedding-001" });
 
-      // Generate an embedding for each chunk and save to Supabase
-      let savedCount = 0;
-      for (const chunk of chunks) {
-        const cleanChunk = chunk.trim();
-        if (cleanChunk.length < 20) continue; // Skip useless short fragments
+      console.log(`Total chunks to process: ${chunks.length}. Generating embeddings in parallel...`);
 
-        // Get the vector meaning from Google
-        const result = await embeddingModel.embedContent(cleanChunk);
-        const embeddingArray = result.embedding.values;
-        
-        // Format for PostgreSQL vector type
-        const embeddingString = `[${embeddingArray.join(',')}]`;
+      // ৩. প্যারালাল প্রসেসিং (Promise.all) - সব এপিআই কল একসাথে হবে
+      const promises = chunks.map(async (cleanChunk) => {
+        try {
+          const result = await embeddingModel.embedContent(cleanChunk);
+          const embeddingArray = result.embedding.values;
+          const embeddingString = `[${embeddingArray.join(',')}]`;
 
-        // Save to database
-        await pool.query(
-          "INSERT INTO knowledge_chunks (content, embedding) VALUES ($1, $2)",
-          [cleanChunk, embeddingString]
-        );
-        savedCount++;
-      }
-      console.log(`=== SYNC COMPLETE: Saved ${savedCount} smart chunks to Supabase ===`);
+          return pool.query(
+            "INSERT INTO knowledge_chunks (content, embedding) VALUES ($1, $2)",
+            [cleanChunk, embeddingString]
+          );
+        } catch (chunkError) {
+          console.error("Error processing individual chunk:", chunkError.message);
+          return null; // কোনো একটি চাঙ্ক ফেইল করলেও যাতে পুরো প্রসেস ক্র্যাশ না করে
+        }
+      });
+
+      await Promise.all(promises);
+      console.log(`=== SYNC COMPLETE: Saved smart chunks to Supabase ===`);
     }
   } catch (error) {
     console.error("Google Doc Source: FAILED TO LOAD", error);
@@ -108,7 +108,7 @@ async function buildMasterBrain() {
 async function processCoreAIRequest(userMessage, currentHistory) {
   
   // A. Convert the user's question into a vector
-  const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+  const embeddingModel = genAI.getGenerativeModel({ model: "embedding-001" });
   const embedResult = await embeddingModel.embedContent(userMessage);
   const queryVector = `[${embedResult.embedding.values.join(',')}]`;
 
