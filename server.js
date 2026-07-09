@@ -78,7 +78,7 @@ async function buildMasterBrain() {
       console.log(`Total chunks detected: ${rawChunks.length}. Syncing in safe batches...`);
 
       let savedCount = 0;
-      const batchSize = 50; // Process 50 chunks at a time
+      const batchSize = 25; // Process 50 chunks at a time
       let currentTab = "General"; // Default tab name
 
       for (let i = 0; i < rawChunks.length; i += batchSize) {
