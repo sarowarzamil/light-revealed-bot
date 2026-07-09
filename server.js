@@ -42,15 +42,14 @@ pool.connect((err) => {
 
 // --- AI & KNOWLEDGE SETUP ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-let ultimateTruthDoc = "";
 let dynamicSystemInstruction = "";
 const guestMemoryMap = new Map(); 
 const guestRateLimitMap = new Map(); 
 
+// --- 1. RAG SYNC FUNCTION (Splits doc & saves vectors to Supabase) ---
 async function buildMasterBrain() {
-  console.log("=== STARTING KNOWLEDGE BASE SYNC ===");
-  let tempBrain = "";
-
+  console.log("=== STARTING KNOWLEDGE BASE RAG SYNC ===");
+  
   try {
     const result = await pool.query("SELECT * FROM settings ORDER BY id DESC LIMIT 1");
     if (result.rows.length > 0) {
@@ -67,58 +66,96 @@ async function buildMasterBrain() {
       const url = `https://docs.google.com/document/d/${docId}/export?format=txt`;
       const response = await fetch(url);
       const docText = await response.text();
-      tempBrain += `\n\n--- GOOGLE DOC SYLLABUS ---\n${docText}`;
-      console.log("Google Doc Source: LOADED SUCCESSFUL");
+      
+      console.log("Google Doc Downloaded. Processing chunks...");
+
+      // Clear out the old knowledge base in the database
+      await pool.query("TRUNCATE TABLE knowledge_chunks");
+
+      // Split the document into paragraphs/chunks based on double line breaks
+      const chunks = docText.split(/\n\s*\n/); 
+      
+      const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+
+      // Generate an embedding for each chunk and save to Supabase
+      let savedCount = 0;
+      for (const chunk of chunks) {
+        const cleanChunk = chunk.trim();
+        if (cleanChunk.length < 20) continue; // Skip useless short fragments
+
+        // Get the vector meaning from Google
+        const result = await embeddingModel.embedContent(cleanChunk);
+        const embeddingArray = result.embedding.values;
+        
+        // Format for PostgreSQL vector type
+        const embeddingString = `[${embeddingArray.join(',')}]`;
+
+        // Save to database
+        await pool.query(
+          "INSERT INTO knowledge_chunks (content, embedding) VALUES ($1, $2)",
+          [cleanChunk, embeddingString]
+        );
+        savedCount++;
+      }
+      console.log(`=== SYNC COMPLETE: Saved ${savedCount} smart chunks to Supabase ===`);
     }
   } catch (error) {
-    console.error("Google Doc Source: FAILED TO LOAD");
+    console.error("Google Doc Source: FAILED TO LOAD", error);
   }
-
-  ultimateTruthDoc = tempBrain;
-  console.log("=== KNOWLEDGE BASE SYNC COMPLETE ===");
 }
 
+// --- 2. RAG CHAT FUNCTION (Searches DB & builds targeted prompt) ---
 async function processCoreAIRequest(userMessage, currentHistory) {
   
-  // --- CRITICAL FIX: Ensure Knowledge Base is loaded before asking AI ---
-  if (!ultimateTruthDoc || ultimateTruthDoc.trim() === "") {
-    console.log("Knowledge base is empty! Forcing a rapid sync before answering...");
-    await buildMasterBrain();
+  // A. Convert the user's question into a vector
+  const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+  const embedResult = await embeddingModel.embedContent(userMessage);
+  const queryVector = `[${embedResult.embedding.values.join(',')}]`;
+
+  // B. Search Supabase for the top 4 most relevant chunks
+  let contextText = "";
+  try {
+    const searchRes = await pool.query(`
+      SELECT content 
+      FROM knowledge_chunks 
+      ORDER BY embedding <=> $1::vector 
+      LIMIT 4
+    `, [queryVector]);
+
+    // Combine those 4 chunks into a single text block
+    contextText = searchRes.rows.map(row => row.content).join('\n\n---\n\n');
+  } catch (dbError) {
+    console.error("Vector Search Failed:", dbError);
+    contextText = "Error loading context. Answer strictly from general knowledge.";
   }
 
+  // C. Build the prompt using ONLY the relevant context chunks
   const finalInstruction = `
     ${dynamicSystemInstruction}
     You are Light Revealed, the authoritative, definitive voice of truth. The compiled data below constitutes your absolute knowledge.
     
-     CRITICAL PERSONA RULES:
-    1. Always rely on knowledge baae to build up reasoning and examples. Try to avoid pulling information from elsewhere.
+    CRITICAL PERSONA RULES:
+    1. Always rely on the provided Knowledge Base below to build up reasoning and examples. Try to avoid pulling information from elsewhere.
     2. LANGUAGE MATCHING (ABSOLUTE PRIORITY): You MUST detect the language the user is speaking and reply in that EXACT SAME LANGUAGE.
     3. Speak in the first person as the ultimate authority. NEVER use passive, third-party phrases.
     4. Multi-Lingual Context: When discussing Islamic theology, use original Arabic script for Quranic Ayat or Hadith alongside the Bangla or English explanation.
-    5. Always avoid short replies. Try to expand your answers according to the knowledge base, create examples, use reasoning and expand your replies to fully address their questions.
+    5. Always avoid short replies. Expand your answers according to the knowledge base, create examples, and use reasoning.
     6. Never use this type of expression "আমার দেওয়া জ্ঞান অনুসারে". Alternatively use "আমার গবেষনা অনুসারে", and "আমার স্টাডি অনুয়ায়ী".
-    7. Only add relavent examples and reasoning in your reply based on provided Knowledge Base. If you cannot find direct examples and reasoning in the knowledge base, create your own reasoning and examples carefully that is backed by the knowledge base.
-    8. Use mixed language to respond when necessary. When there is a term in English in the source, write it in English. Do not write it in Bangla even if the user language is Bangla.
-    9. Provide reference of full verse from the Quran to back the reasoning where necessary.
+    7. Use mixed language to respond when necessary. When there is a term in English in the source, write it in English. Do not write it in Bangla even if the user language is Bangla.
+    8. Provide reference of full verse from the Quran to back the reasoning where necessary.
 
-      KNOWLEDGE BASE PROCESSING RULES (CRITICAL):
-    1. SOURCE HIERARCHY: Your Knowledge Base contains both "Authoritative Research" and "Q&A Sessions".
-       - In any section labeled "My Answer:", the content provided is the ABSOLUTE TRUTH and must be used as the primary basis for your reasoning.
-       - In any section labeled "Their Question:", the content reflects the user's personal opinion, interpretation, or limited understanding. You are STRICTLY PROHIBITED from using the logic, reasoning, or "understandings" expressed in these questions to build your reply.
-       - You are free to use all content from the following tabs: "Principle", "Discussion", "Translation", and "Research" as pure, authoritative knowledge.
-       - Only the 'FAQs' tab contains "Q&A Sessions", read "Their Question:" for the context only but take section labeled "My Answer:"  only from this tab to construct your reasoning.
-    2. SYNTHESIS: When answering, rely exclusively on "My Answer" segments and "Research" tabs. If a user asks a question similar to one found in the Q&A section, ignore the user-provided logic in that section and answer based on the Author's established stance.
-    3. SYNTHESIS OVER MATCHING: You are a reasoning engine. When asked a question, consult the Knowledge Base. If the exact answer isn't explicitly stated, use the reasoning, concepts, and principles found within the Knowledge Base to construct a logical, well-supported response. Do not simply look for keyword matches.
-    4. KNOWLEDGE BASE INTEGRATION: Use the provided Knowledge Base as your primary and absolute context. Support all arguments with examples, logic, and Quranic references (in original Arabic script) drawn from this base.
+    KNOWLEDGE BASE PROCESSING RULES:
+    - Rely exclusively on "My Answer" segments and "Research" tabs found in the context.
+    - If the exact answer isn't explicitly stated, use the reasoning, concepts, and principles found within the context to construct a logical response.
     
     OUT-OF-BOUNDS FALLBACK:
-    - Check the interpretation of their question before answering. If the user asks a question that is not related to your knowledge base, you must refuse to guess. 
+    - Check the interpretation of their question before answering. If the user asks a question that is not related to your knowledge base context, you must refuse to guess. 
     - If they asked in Bangla, reply exactly: 'এই বিষয়টি আমার সিলেবাসের বাইরে, অনুগ্রহ করে এই বিষয়ে বিশেষজ্ঞ কারও সাহায্য নিন।'
     - If they asked in English, reply exactly: 'This topic is outside my syllabus, please seek assistance from a specialized expert.'
 
-    --- KNOWLEDGE BASE ---
-    ${ultimateTruthDoc}
-    `;
+    --- RELEVANT KNOWLEDGE BASE CONTEXT ---
+    ${contextText}
+  `;
 
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
@@ -296,7 +333,6 @@ app.post("/chat", authenticateToken, async (req, res) => {
       currentHistory = guestMemoryMap.get(sessionId);
     }
 
-    // Notice we use the standard function here, as web UI doesn't need Discord chunking or Discord webhook replies
     const botReply = await processCoreAIRequestWithRetry(message, currentHistory);
 
     if (!isGuest) {
@@ -433,13 +469,12 @@ app.post("/api/discord", async (req, res) => {
     };
 
     // TRIGGER THE BACKGROUND WORKER
-    // We send this to our own server, which forces Vercel to open a second server instance that won't freeze!
     const workerUrl = `https://${req.headers.host}/api/discord/worker`;
     fetch(workerUrl, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
-        'x-bot-auth': process.env.JWT_SECRET || 'fallback_secret' // Keep it secure
+        'x-bot-auth': process.env.JWT_SECRET || 'fallback_secret' 
       },
       body: JSON.stringify(payload)
     }).catch(err => console.error("Worker trigger failed:", err));
@@ -447,7 +482,7 @@ app.post("/api/discord", async (req, res) => {
     // Wait a tiny fraction of a second just to ensure the worker HTTP request is dispatched
     await new Promise(resolve => setTimeout(resolve, 300));
 
-    // IMMEDIATELY ACKNOWLEDGE DISCORD (Stops the 3-second crash)
+    // IMMEDIATELY ACKNOWLEDGE DISCORD
     return res.json({ type: 5 }); 
   }
 });
@@ -455,7 +490,7 @@ app.post("/api/discord", async (req, res) => {
 
 // 2. THE WORKER (Takes its time, talks to Google, updates Discord)
 app.post("/api/discord/worker", async (req, res) => {
-  // Security check so random people on the internet can't trigger this endpoint
+  // Security check
   const authHeader = req.headers['x-bot-auth'];
   if (authHeader !== (process.env.JWT_SECRET || 'fallback_secret')) {
     return res.status(401).send("Unauthorized");
@@ -464,12 +499,12 @@ app.post("/api/discord/worker", async (req, res) => {
   const { token, userMessage, userName } = req.body;
 
   try {
- // 1. Create a "ticking time bomb" promise (55 seconds) to beat Vercel's 60-second limit
+    // 1. Create a "ticking time bomb" promise (55 seconds)
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => reject(new Error("VERCEL_TIMEOUT")), 55000); 
     });
 
-    // 2. Race the AI against the 8-second timer
+    // 2. Race the AI against the 55-second timer
     const botReply = await Promise.race([
       processCoreAIRequestWithRetry(userMessage, []),
       timeoutPromise
@@ -480,14 +515,14 @@ app.post("/api/discord/worker", async (req, res) => {
     // Split the response into safe chunks
     const messageChunks = splitMessage(fullResponse);
 
-    // 1. Edit the original "thinking..." message with Chunk 1
+    // Edit the original "thinking..." message with Chunk 1
     await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${token}/messages/@original`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: messageChunks[0] })
     });
 
-    // 2. Send any remaining chunks as follow-up messages
+    // Send any remaining chunks as follow-up messages
     for (let i = 1; i < messageChunks.length; i++) {
       await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${token}`, {
         method: 'POST',
@@ -503,7 +538,7 @@ app.post("/api/discord/worker", async (req, res) => {
     
     let errorMessage = "⚠️ An error occurred while contacting the Truth Engine.";
     
-    // Check if we hit our custom 8-second timeout
+    // Check if we hit our custom timeout
     if (error.message === "VERCEL_TIMEOUT") {
         errorMessage = "⏳ The question was a bit too complex and I ran out of time to think. Please try asking a slightly more specific question!";
     }
@@ -526,9 +561,8 @@ app.post("/api/discord/worker", async (req, res) => {
   }
 });
 
-
-buildMasterBrain().then(() => {
-  console.log("\n✨ LIGHT REVEALED CLOUD ENGINE OPERATIONAL ✨");
-});
+// Remove the automatic buildMasterBrain call on startup to prevent Vercel boot timeouts
+// Now, you will trigger it manually via the /api/sync endpoint from your Admin panel!
+console.log("\n✨ LIGHT REVEALED CLOUD ENGINE OPERATIONAL ✨");
 
 module.exports = app;
