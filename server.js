@@ -78,7 +78,7 @@ async function buildMasterBrain() {
       console.log(`Total chunks detected: ${rawChunks.length}. Syncing in safe batches...`);
 
       let savedCount = 0;
-      const batchSize = 10; // Process 10 chunks at a time
+      const batchSize = 6; // Process 6 chunks at a time
       let currentTab = "General"; // Default tab name
 
       for (let i = 0; i < rawChunks.length; i += batchSize) {
@@ -117,8 +117,8 @@ async function buildMasterBrain() {
         // Run the batch of 10
         await Promise.all(promises);
         
-        // 🚦 CRITICAL: Pause for 1 second to prevent Google 429 Rate Limits
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // 🚦 CRITICAL: Pause for 3 second to prevent Google 429 Rate Limits
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
       
       console.log(`=== SYNC COMPLETE: Saved ${savedCount} domain-tagged chunks to Supabase ===`);
