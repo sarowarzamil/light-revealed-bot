@@ -18,7 +18,6 @@ app.use(express.json({
   }
 }));
 
-// --- RESTORED ORIGINAL WORKING ROUTES ---
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => {
@@ -46,7 +45,7 @@ let dynamicSystemInstruction = "";
 const guestMemoryMap = new Map(); 
 const guestRateLimitMap = new Map(); 
 
-// --- 1. RAG SYNC FUNCTION (Splits doc & saves vectors to Supabase) ---
+// --- 1. RAG SYNC FUNCTION (Safe Batched Version with Metadata) ---
 async function buildMasterBrain() {
   console.log("=== STARTING KNOWLEDGE BASE RAG SYNC ===");
   
@@ -69,89 +68,112 @@ async function buildMasterBrain() {
       
       console.log("Google Doc Downloaded. Processing chunks...");
 
-      // ১. ডাটাবেজ ক্লিয়ার করা
+      // Clear old database
       await pool.query("TRUNCATE TABLE knowledge_chunks");
 
-      // ২. চাঙ্ক তৈরি করা
-      const chunks = docText.split(/\n\s*\n/).map(c => c.trim()).filter(c => c.length >= 20); 
-      
+      // Split into chunks using the custom $$$ delimiter
+      const rawChunks = docText.split('$$$').map(c => c.trim()).filter(c => c.length >= 20); 
       const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
 
-      console.log(`Total chunks to process: ${chunks.length}. Generating embeddings in parallel...`);
+      console.log(`Total chunks detected: ${rawChunks.length}. Syncing in safe batches...`);
 
-      // ৩. প্যারালাল প্রসেসিং (Promise.all) - সব এপিআই কল একসাথে হবে
-      const promises = chunks.map(async (cleanChunk) => {
-        try {
-          const result = await embeddingModel.embedContent(cleanChunk);
-          const embeddingArray = result.embedding.values;
-          const embeddingString = `[${embeddingArray.join(',')}]`;
+      let savedCount = 0;
+      const batchSize = 10; // Process 10 chunks at a time
+      let currentTab = "General"; // Default tab name
 
-          return pool.query(
-            "INSERT INTO knowledge_chunks (content, embedding) VALUES ($1, $2)",
-            [cleanChunk, embeddingString]
-          );
-        } catch (chunkError) {
-          console.error("Error processing individual chunk:", chunkError.message);
-          return null; // কোনো একটি চাঙ্ক ফেইল করলেও যাতে পুরো প্রসেস ক্র্যাশ না করে
-        }
-      });
+      for (let i = 0; i < rawChunks.length; i += batchSize) {
+        const batch = rawChunks.slice(i, i + batchSize);
+        
+        const promises = batch.map(async (chunk) => {
+          try {
+            // Check if chunk contains a Tab Header like "=== TAB: Salat / সালাত ==="
+            const tabMatch = chunk.match(/===\s*TAB:\s*(.*?)\s*===/i);
+            if (tabMatch) {
+              currentTab = tabMatch[1].trim(); 
+            }
 
-      await Promise.all(promises);
-      console.log(`=== SYNC COMPLETE: Saved smart chunks to Supabase ===`);
+            // Remove the tab header from the body text so it looks clean
+            let cleanChunk = chunk.replace(/===\s*TAB:.*?\s*===/gi, '').trim();
+            if (cleanChunk.length < 20) return; // Skip if it was just an empty header block
+
+            // Prefix the chunk with its Tab Name for permanent semantic binding
+            const contextualChunk = `[Domain: ${currentTab}]\n${cleanChunk}`;
+
+            // Generate vector
+            const result = await embeddingModel.embedContent(contextualChunk);
+            const embeddingString = `[${result.embedding.values.join(',')}]`;
+            
+            // Save chunk text, vector, and tab metadata to Supabase
+            await pool.query(
+              "INSERT INTO knowledge_chunks (tab_name, content, embedding) VALUES ($1, $2, $3)",
+              [currentTab, contextualChunk, embeddingString]
+            );
+            savedCount++;
+          } catch (chunkError) {
+            console.error("Chunk failed:", chunkError.message);
+          }
+        });
+
+        // Run the batch of 10
+        await Promise.all(promises);
+        
+        // 🚦 CRITICAL: Pause for 1 second to prevent Google 429 Rate Limits
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
+      console.log(`=== SYNC COMPLETE: Saved ${savedCount} domain-tagged chunks to Supabase ===`);
     }
   } catch (error) {
     console.error("Google Doc Source: FAILED TO LOAD", error);
   }
 }
 
-// --- 2. RAG CHAT FUNCTION (Searches DB & builds targeted prompt) ---
+// --- 2. RAG CHAT FUNCTION (Retrieval Engine) ---
 async function processCoreAIRequest(userMessage, currentHistory) {
   
-  // A. Convert the user's question into a vector
+  // Convert question to vector
   const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
   const embedResult = await embeddingModel.embedContent(userMessage);
   const queryVector = `[${embedResult.embedding.values.join(',')}]`;
 
-  // B. Search Supabase for the top 4 most relevant chunks
   let contextText = "";
   try {
+    // Fetch the top 8 most relevant chunks (pulls specific Q&As and tagged Supporting Chunks)
     const searchRes = await pool.query(`
       SELECT content 
       FROM knowledge_chunks 
       ORDER BY embedding <=> $1::vector 
-      LIMIT 4
+      LIMIT 8
     `, [queryVector]);
 
-    // Combine those 4 chunks into a single text block
     contextText = searchRes.rows.map(row => row.content).join('\n\n---\n\n');
   } catch (dbError) {
     console.error("Vector Search Failed:", dbError);
     contextText = "Error loading context. Answer strictly from general knowledge.";
   }
 
-  // C. Build the prompt using ONLY the relevant context chunks
   const finalInstruction = `
     ${dynamicSystemInstruction}
     You are Light Revealed, the authoritative, definitive voice of truth. The compiled data below constitutes your absolute knowledge.
     
     CRITICAL PERSONA RULES:
-    1. Always rely on the provided Knowledge Base below to build up reasoning and examples. Try to avoid pulling information from elsewhere.
+    1. Rely exclusively on the provided Knowledge Base below to build reasoning and examples.
     2. LANGUAGE MATCHING (ABSOLUTE PRIORITY): You MUST detect the language the user is speaking and reply in that EXACT SAME LANGUAGE.
     3. Speak in the first person as the ultimate authority. NEVER use passive, third-party phrases.
     4. Multi-Lingual Context: When discussing Islamic theology, use original Arabic script for Quranic Ayat or Hadith alongside the Bangla or English explanation.
     5. Always avoid short replies. Expand your answers according to the knowledge base, create examples, and use reasoning.
-    6. Never use this type of expression "আমার দেওয়া জ্ঞান অনুসারে". Alternatively use "আমার গবেষনা অনুসারে", and "আমার স্টাডি অনুয়ায়ী".
-    7. Use mixed language to respond when necessary. When there is a term in English in the source, write it in English. Do not write it in Bangla even if the user language is Bangla.
-    8. Provide reference of full verse from the Quran to back the reasoning where necessary.
+    6. Never use expressions like "আমার দেওয়া জ্ঞান অনুসারে". Alternatively use "আমার গবেষনা অনুসারে", or "আমার স্টাডি অনুয়ায়ী".
+    7. Provide reference of full verse from the Quran to back the reasoning where necessary.
 
     KNOWLEDGE BASE PROCESSING RULES:
-    - Rely exclusively on "My Answer" segments and "Research" tabs found in the context.
-    - If the exact answer isn't explicitly stated, use the reasoning, concepts, and principles found within the context to construct a logical response.
+    - The provided context contains domain-tagged chunks (e.g., [Domain: Salat]). 
+    - Treat chunks tagged as "Supporting Chunk" as foundational logical frameworks. Use them to back up your reasoning.
+    - If the exact answer isn't explicitly stated, use the reasoning, concepts, and principles found within these domain chunks to construct a logical response.
     
     OUT-OF-BOUNDS FALLBACK:
-    - Check the interpretation of their question before answering. If the user asks a question that is not related to your knowledge base context, you must refuse to guess. 
-    - If they asked in Bangla, reply exactly: 'এই বিষয়টি আমার সিলেবাসের বাইরে, অনুগ্রহ করে এই বিষয়ে বিশেষজ্ঞ কারও সাহায্য নিন।'
-    - If they asked in English, reply exactly: 'This topic is outside my syllabus, please seek assistance from a specialized expert.'
+    - If the user asks a question that is entirely unrelated to the provided knowledge base context, refuse to guess. 
+    - Fallback (Bangla): 'এই বিষয়টি আমার সিলেবাসের বাইরে, অনুগ্রহ করে এই বিষয়ে বিশেষজ্ঞ কারও সাহায্য নিন।'
+    - Fallback (English): 'This topic is outside my syllabus, please seek assistance from a specialized expert.'
 
     --- RELEVANT KNOWLEDGE BASE CONTEXT ---
     ${contextText}
@@ -180,7 +202,7 @@ async function processCoreAIRequestWithRetry(userMessage, currentHistory, retrie
     } catch (error) {
       if ((error.status === 503 || (error.message && error.message.includes("503"))) && attempt < retries) {
         console.warn(`Gemini 503 Overload detected. Retrying attempt ${attempt + 1}/${retries}...`);
-        await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2 seconds
+        await new Promise((resolve) => setTimeout(resolve, 2000)); 
       } else {
         throw error; 
       }
@@ -292,7 +314,7 @@ app.post("/chat", authenticateToken, async (req, res) => {
   try {
     let currentHistory = [];
 
-    // --- RATE LIMITING LOGIC ---
+    // Rate Limiting Logic
     if (!isGuest) {
       const userRes = await pool.query("SELECT daily_chat_count, custom_limit, last_reset_date FROM users WHERE id = $1", [req.user.id]);
       if (userRes.rows.length > 0) {
@@ -323,7 +345,6 @@ app.post("/chat", authenticateToken, async (req, res) => {
       }
       guestData.count += 1;
     }
-    // --- END RATE LIMITING ---
 
     if (!isGuest) {
       const histRes = await pool.query("SELECT role, content FROM messages WHERE user_id = $1 AND session_id = $2 ORDER BY id ASC LIMIT 1000", [req.user.id, sessionId]);
@@ -375,9 +396,10 @@ app.post("/api/settings", async (req, res) => {
   }
 });
 
-app.post("/api/sync", async (req, res) => {
+// Admin Sync Button Endpoint
+app.all("/api/sync", async (req, res) => {
   await buildMasterBrain();
-  res.json({ success: true });
+  res.json({ success: true, message: "Sync successful!" });
 });
 
 app.get("/api/users", async (req, res) => {
@@ -460,8 +482,6 @@ app.post("/api/discord", async (req, res) => {
   }
 
   if (interaction.type === 2 && interaction.data.name === "ask") {
-    
-    // Package up the info we need for the AI
     const payload = {
       token: interaction.token,
       userMessage: interaction.data.options[0].value,
@@ -479,10 +499,7 @@ app.post("/api/discord", async (req, res) => {
       body: JSON.stringify(payload)
     }).catch(err => console.error("Worker trigger failed:", err));
 
-    // Wait a tiny fraction of a second just to ensure the worker HTTP request is dispatched
     await new Promise(resolve => setTimeout(resolve, 300));
-
-    // IMMEDIATELY ACKNOWLEDGE DISCORD
     return res.json({ type: 5 }); 
   }
 });
@@ -490,7 +507,6 @@ app.post("/api/discord", async (req, res) => {
 
 // 2. THE WORKER (Takes its time, talks to Google, updates Discord)
 app.post("/api/discord/worker", async (req, res) => {
-  // Security check
   const authHeader = req.headers['x-bot-auth'];
   if (authHeader !== (process.env.JWT_SECRET || 'fallback_secret')) {
     return res.status(401).send("Unauthorized");
@@ -499,30 +515,24 @@ app.post("/api/discord/worker", async (req, res) => {
   const { token, userMessage, userName } = req.body;
 
   try {
-    // 1. Create a "ticking time bomb" promise (55 seconds)
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => reject(new Error("VERCEL_TIMEOUT")), 55000); 
     });
 
-    // 2. Race the AI against the 55-second timer
     const botReply = await Promise.race([
       processCoreAIRequestWithRetry(userMessage, []),
       timeoutPromise
     ]);
 
     const fullResponse = `**${userName} asked:** "${userMessage}"\n\n${botReply}`;
-
-    // Split the response into safe chunks
     const messageChunks = splitMessage(fullResponse);
 
-    // Edit the original "thinking..." message with Chunk 1
     await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${token}/messages/@original`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: messageChunks[0] })
     });
 
-    // Send any remaining chunks as follow-up messages
     for (let i = 1; i < messageChunks.length; i++) {
       await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${token}`, {
         method: 'POST',
@@ -538,11 +548,9 @@ app.post("/api/discord/worker", async (req, res) => {
     
     let errorMessage = "⚠️ An error occurred while contacting the Truth Engine.";
     
-    // Check if we hit our custom timeout
     if (error.message === "VERCEL_TIMEOUT") {
         errorMessage = "⏳ The question was a bit too complex and I ran out of time to think. Please try asking a slightly more specific question!";
     }
-    // Check for rate limits and server overload
     else if (error.status === 429 || (error.message && error.message.includes("429"))) {
         errorMessage = `⏳ Light Revealed is currently busy. Please wait a few moments and try again.`;
     } 
@@ -550,7 +558,6 @@ app.post("/api/discord/worker", async (req, res) => {
         errorMessage = "🔥 Light Revealed server is currently experiencing high demand. Please try again in a minute.";
     }
 
-    // Update Discord with the error
     await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${token}/messages/@original`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -561,8 +568,6 @@ app.post("/api/discord/worker", async (req, res) => {
   }
 });
 
-// Remove the automatic buildMasterBrain call on startup to prevent Vercel boot timeouts
-// Now, you will trigger it manually via the /api/sync endpoint from your Admin panel!
 console.log("\n✨ LIGHT REVEALED CLOUD ENGINE OPERATIONAL ✨");
 
 module.exports = app;
