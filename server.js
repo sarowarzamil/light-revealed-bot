@@ -73,7 +73,7 @@ async function buildMasterBrain() {
 
       // Split into chunks using the custom $$$ delimiter
       const rawChunks = docText.split('$$$').map(c => c.trim()).filter(c => c.length >= 20); 
-      const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
+      const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
 
       console.log(`Total chunks detected: ${rawChunks.length}. Syncing in safe batches...`);
 
@@ -132,7 +132,7 @@ async function buildMasterBrain() {
 async function processCoreAIRequest(userMessage, currentHistory) {
   
   // Convert question to vector
-  const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
+  const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
   const embedResult = await embeddingModel.embedContent(userMessage);
   const queryVector = `[${embedResult.embedding.values.join(',')}]`;
 
@@ -181,7 +181,7 @@ async function processCoreAIRequest(userMessage, currentHistory) {
   `;
 
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
+    model: "gemini-3.5-flash", 
     systemInstruction: finalInstruction,
   });
 
