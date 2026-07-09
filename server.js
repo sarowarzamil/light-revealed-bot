@@ -143,7 +143,7 @@ async function processCoreAIRequest(userMessage, currentHistory) {
       SELECT content 
       FROM knowledge_chunks 
       ORDER BY embedding <=> $1::vector 
-      LIMIT 16
+      LIMIT 12
     `, [queryVector]);
 
     contextText = searchRes.rows.map(row => row.content).join('\n\n---\n\n');
