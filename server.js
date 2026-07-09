@@ -78,62 +78,47 @@ async function buildMasterBrain() {
       console.log(`Total chunks detected: ${rawChunks.length}. Syncing in safe batches...`);
 
       let savedCount = 0;
+      const batchSize = 50; // Process 50 chunks at a time
       let currentTab = "General"; // Default tab name
 
-      // 🚦 Helper function for waiting
-      const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-      // Process strictly one by one (Sequential)
-      for (let i = 0; i < rawChunks.length; i++) {
-        const chunk = rawChunks[i];
+      for (let i = 0; i < rawChunks.length; i += batchSize) {
+        const batch = rawChunks.slice(i, i + batchSize);
         
-        try {
-          // 1. Extract and format tab metadata
-          const tabMatch = chunk.match(/===\s*TAB:\s*(.*?)\s*===/i);
-          if (tabMatch) {
-            currentTab = tabMatch[1].trim(); 
-          }
-
-          let cleanChunk = chunk.replace(/===\s*TAB:.*?\s*===/gi, '').trim();
-          if (cleanChunk.length < 20) continue; // Skip empty blocks
-
-          const contextualChunk = `[Domain: ${currentTab}]\n${cleanChunk}`;
-
-          // 2. Fetch Embedding WITH Exponential Backoff for 429s
-          let result = null;
-          let retries = 3;
-          
-          for (let attempt = 1; attempt <= retries; attempt++) {
-            try {
-              result = await embeddingModel.embedContent(contextualChunk);
-              break; // Success! Break out of the retry loop.
-            } catch (apiError) {
-              if ((apiError.status === 429 || (apiError.message && apiError.message.includes("429"))) && attempt < retries) {
-                const waitTime = attempt * 5000; // Wait 5s, then 10s...
-                console.warn(`[429] Rate limit hit on chunk ${i+1}/${rawChunks.length}. Retrying in ${waitTime/1000}s...`);
-                await sleep(waitTime);
-              } else {
-                throw apiError; // Fails completely if not 429 or out of retries
-              }
+        const promises = batch.map(async (chunk) => {
+          try {
+            // Check if chunk contains a Tab Header like "=== TAB: Salat / সালাত ==="
+            const tabMatch = chunk.match(/===\s*TAB:\s*(.*?)\s*===/i);
+            if (tabMatch) {
+              currentTab = tabMatch[1].trim(); 
             }
-          }
 
-          if (result && result.embedding) {
+            // Remove the tab header from the body text so it looks clean
+            let cleanChunk = chunk.replace(/===\s*TAB:.*?\s*===/gi, '').trim();
+            if (cleanChunk.length < 20) return; // Skip if it was just an empty header block
+
+            // Prefix the chunk with its Tab Name for permanent semantic binding
+            const contextualChunk = `[Domain: ${currentTab}]\n${cleanChunk}`;
+
+            // Generate vector
+            const result = await embeddingModel.embedContent(contextualChunk);
             const embeddingString = `[${result.embedding.values.join(',')}]`;
             
-            // 3. Save to Supabase
+            // Save chunk text, vector, and tab metadata to Supabase
             await pool.query(
               "INSERT INTO knowledge_chunks (tab_name, content, embedding) VALUES ($1, $2, $3)",
               [currentTab, contextualChunk, embeddingString]
             );
             savedCount++;
+          } catch (chunkError) {
+            console.error("Chunk failed:", chunkError.message);
           }
+        });
 
-          // 🚦 CRITICAL: Pause for 4.5 seconds between EVERY chunk.
-          await sleep(4500);
-
-        } catch (chunkError) {
-          console.error(`Fatal error on chunk ${i+1}:`, chunkError.message);
+        // Run the batch of 4
+        await Promise.all(promises);
+        
+        // 🚦 CRITICAL: Pause for 3 second to prevent Google 429 Rate Limits
+        await new Promise(resolve => setTimeout(resolve, 3000));
         }
       }
       
@@ -159,7 +144,7 @@ async function processCoreAIRequest(userMessage, currentHistory) {
       SELECT content 
       FROM knowledge_chunks 
       ORDER BY embedding <=> $1::vector 
-      LIMIT 12
+      LIMIT 16
     `, [queryVector]);
 
     contextText = searchRes.rows.map(row => row.content).join('\n\n---\n\n');
