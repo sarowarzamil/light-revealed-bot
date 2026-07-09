@@ -7,6 +7,7 @@ const { Pool } = require("pg");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const { verifyKey } = require("discord-interactions"); 
+const { Client, GatewayIntentBits } = require("discord.js");
 
 const app = express();
 app.use(cors());
@@ -78,7 +79,7 @@ async function buildMasterBrain() {
       console.log(`Total chunks detected: ${rawChunks.length}. Syncing in safe batches...`);
 
       let savedCount = 0;
-      const batchSize = 20; // Process 50 chunks at a time
+      const batchSize = 20; // Process chunks safely
       let currentTab = "General"; // Default tab name
 
       for (let i = 0; i < rawChunks.length; i += batchSize) {
@@ -114,10 +115,9 @@ async function buildMasterBrain() {
           }
         });
 
-        // Run the batch of 4
         await Promise.all(promises);
         
-        // 🚦 CRITICAL: Pause for 3 second to prevent Google 429 Rate Limits
+        // Pause between batches to respect rate limits
         await new Promise(resolve => setTimeout(resolve, 30000));
       }
       
@@ -232,7 +232,6 @@ function splitMessage(text, maxLength = 1950) {
   return chunks;
 }
 
-
 // --- AUTHENTICATION ROUTES ---
 app.post("/signup", async (req, res) => {
   const { username, password } = req.body;
@@ -315,7 +314,6 @@ app.post("/chat", authenticateToken, async (req, res) => {
   try {
     let currentHistory = [];
 
-    // Rate Limiting Logic
     if (!isGuest) {
       const userRes = await pool.query("SELECT daily_chat_count, custom_limit, last_reset_date FROM users WHERE id = $1", [req.user.id]);
       if (userRes.rows.length > 0) {
@@ -399,8 +397,9 @@ app.post("/api/settings", async (req, res) => {
 
 // Admin Sync Button Endpoint
 app.all("/api/sync", async (req, res) => {
-  await buildMasterBrain();
-  res.json({ success: true, message: "Sync successful!" });
+  // Triggers sync safely in the background on Render
+  buildMasterBrain().catch(err => console.error("Background Sync Error:", err));
+  res.json({ success: true, message: "Sync started in background! Check server logs for progress." });
 });
 
 app.get("/api/users", async (req, res) => {
@@ -422,9 +421,8 @@ app.post("/api/update-limit", async (req, res) => {
   }
 });
 
-
 // ==========================================
-// --- DISCORD BOT INTEGRATION (SERVERLESS) ---
+// --- DISCORD BOT INTEGRATION (SLASH COMMAND) ---
 // ==========================================
 
 app.get("/api/discord/register", async (req, res) => {
@@ -460,8 +458,6 @@ app.get("/api/discord/register", async (req, res) => {
   }
 });
 
-
-// 1. THE RECEIVER (Talks to Discord fast, triggers worker)
 app.post("/api/discord", async (req, res) => {
   const signature = req.headers["x-signature-ed25519"];
   const timestamp = req.headers["x-signature-timestamp"];
@@ -489,8 +485,7 @@ app.post("/api/discord", async (req, res) => {
       userName: interaction.member.user.username
     };
 
-    // TRIGGER THE BACKGROUND WORKER
-    const workerUrl = `https://${req.headers.host}/api/discord/worker`;
+    const workerUrl = `http://localhost:${process.env.PORT || 3000}/api/discord/worker`;
     fetch(workerUrl, {
       method: 'POST',
       headers: { 
@@ -505,8 +500,6 @@ app.post("/api/discord", async (req, res) => {
   }
 });
 
-
-// 2. THE WORKER (Takes its time, talks to Google, updates Discord)
 app.post("/api/discord/worker", async (req, res) => {
   const authHeader = req.headers['x-bot-auth'];
   if (authHeader !== (process.env.JWT_SECRET || 'fallback_secret')) {
@@ -516,15 +509,7 @@ app.post("/api/discord/worker", async (req, res) => {
   const { token, userMessage, userName } = req.body;
 
   try {
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error("VERCEL_TIMEOUT")), 55000); 
-    });
-
-    const botReply = await Promise.race([
-      processCoreAIRequestWithRetry(userMessage, []),
-      timeoutPromise
-    ]);
-
+    const botReply = await processCoreAIRequestWithRetry(userMessage, []);
     const fullResponse = `**${userName} asked:** "${userMessage}"\n\n${botReply}`;
     const messageChunks = splitMessage(fullResponse);
 
@@ -546,18 +531,7 @@ app.post("/api/discord/worker", async (req, res) => {
 
   } catch (error) {
     console.error("Worker Error:", error);
-    
     let errorMessage = "⚠️ An error occurred while contacting the Truth Engine.";
-    
-    if (error.message === "VERCEL_TIMEOUT") {
-        errorMessage = "⏳ The question was a bit too complex and I ran out of time to think. Please try asking a slightly more specific question!";
-    }
-    else if (error.status === 429 || (error.message && error.message.includes("429"))) {
-        errorMessage = `⏳ Light Revealed is currently busy. Please wait a few moments and try again.`;
-    } 
-    else if (error.status === 503 || (error.message && error.message.includes("503"))) {
-        errorMessage = "🔥 Light Revealed server is currently experiencing high demand. Please try again in a minute.";
-    }
 
     await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${token}/messages/@original`, {
       method: 'PATCH',
@@ -565,10 +539,60 @@ app.post("/api/discord/worker", async (req, res) => {
       body: JSON.stringify({ content: errorMessage })
     });
 
-    return res.status(500).json({ error: "Worker failed or timed out" });
+    return res.status(500).json({ error: "Worker failed" });
   }
 });
 
-console.log("\n✨ LIGHT REVEALED CLOUD ENGINE OPERATIONAL ✨");
+// ==========================================
+// --- DISCORD BOT (NATIVE PERSISTENT CHAT) ---
+// ==========================================
+if (process.env.DISCORD_TOKEN) {
+  const discordClient = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+      GatewayIntentBits.DirectMessages
+    ]
+  });
+
+  discordClient.on('ready', () => {
+    console.log(`🤖 Discord Bot connected as: ${discordClient.user.tag}`);
+  });
+
+  discordClient.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
+
+    // Responds whenever the bot is @mentioned in any channel
+    if (message.mentions.has(discordClient.user.id)) {
+      try {
+        await message.channel.sendTyping();
+        const userQuery = message.content.replace(/<@!?\d+>/g, '').trim();
+
+        const botReply = await processCoreAIRequestWithRetry(userQuery, []);
+        const chunks = splitMessage(botReply);
+
+        for (const chunk of chunks) {
+          await message.reply(chunk);
+        }
+      } catch (err) {
+        console.error("Discord Native Chat Error:", err);
+        await message.reply("⚠️ An error occurred while processing your request.");
+      }
+    }
+  });
+
+  discordClient.login(process.env.DISCORD_TOKEN).catch(err => {
+    console.error("Discord Bot Login Failed:", err.message);
+  });
+}
+
+// ==========================================
+// --- SERVER LISTENER FOR RENDER ---
+// ==========================================
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`\n✨ LIGHT REVEALED CLOUD ENGINE OPERATIONAL ON PORT ${PORT} ✨`);
+});
 
 module.exports = app;
