@@ -78,7 +78,7 @@ async function buildMasterBrain() {
       console.log(`Total chunks detected: ${rawChunks.length}. Syncing in safe batches...`);
 
       let savedCount = 0;
-      const batchSize = 6; // Process 6 chunks at a time
+      const batchSize = 4; // Process 6 chunks at a time
       let currentTab = "General"; // Default tab name
 
       for (let i = 0; i < rawChunks.length; i += batchSize) {
@@ -114,7 +114,7 @@ async function buildMasterBrain() {
           }
         });
 
-        // Run the batch of 10
+        // Run the batch of 4
         await Promise.all(promises);
         
         // 🚦 CRITICAL: Pause for 3 second to prevent Google 429 Rate Limits
@@ -196,14 +196,14 @@ async function processCoreAIRequest(userMessage, currentHistory) {
 }
 
 // --- HELPER: RETRY LOGIC FOR 503 ERRORS ---
-async function processCoreAIRequestWithRetry(userMessage, currentHistory, retries = 2) {
+async function processCoreAIRequestWithRetry(userMessage, currentHistory, retries = 3) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       return await processCoreAIRequest(userMessage, currentHistory);
     } catch (error) {
       if ((error.status === 503 || (error.message && error.message.includes("503"))) && attempt < retries) {
         console.warn(`Gemini 503 Overload detected. Retrying attempt ${attempt + 1}/${retries}...`);
-        await new Promise((resolve) => setTimeout(resolve, 2000)); 
+        await new Promise((resolve) => setTimeout(resolve, 4000)); 
       } else {
         throw error; 
       }
