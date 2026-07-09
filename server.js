@@ -563,22 +563,28 @@ if (process.env.DISCORD_TOKEN) {
   discordClient.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // Responds whenever the bot is @mentioned in any channel
-    if (message.mentions.has(discordClient.user.id)) {
-      try {
-        await message.channel.sendTyping();
-        const userQuery = message.content.replace(/<@!?\d+>/g, '').trim();
+    // 🔒 CHANNEL LOCK: Only process messages in your dedicated channel
+    if (process.env.DISCORD_CHANNEL_ID && message.channel.id !== process.env.DISCORD_CHANNEL_ID) {
+      return; // Ignores all other channels immediately
+    }
 
-        const botReply = await processCoreAIRequestWithRetry(userQuery, []);
-        const chunks = splitMessage(botReply);
+    // You can now allow users to either tag the bot OR just type directly in this channel!
+    try {
+      await message.channel.sendTyping();
+      
+      // Clean out @mentions if they used one
+      const userQuery = message.content.replace(/<@!?\d+>/g, '').trim();
+      if (!userQuery) return;
 
-        for (const chunk of chunks) {
-          await message.reply(chunk);
-        }
-      } catch (err) {
-        console.error("Discord Native Chat Error:", err);
-        await message.reply("⚠️ An error occurred while processing your request.");
+      const botReply = await processCoreAIRequestWithRetry(userQuery, []);
+      const chunks = splitMessage(botReply);
+
+      for (const chunk of chunks) {
+        await message.reply(chunk);
       }
+    } catch (err) {
+      console.error("Discord Native Chat Error:", err);
+      await message.reply("⚠️ An error occurred while processing your request.");
     }
   });
 
