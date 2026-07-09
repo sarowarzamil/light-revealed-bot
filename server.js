@@ -119,7 +119,6 @@ async function buildMasterBrain() {
         
         // 🚦 CRITICAL: Pause for 3 second to prevent Google 429 Rate Limits
         await new Promise(resolve => setTimeout(resolve, 3000));
-        }
       }
       
       console.log(`=== SYNC COMPLETE: Saved ${savedCount} domain-tagged chunks to Supabase ===`);
