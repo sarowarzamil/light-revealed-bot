@@ -90,8 +90,8 @@ app.get("/api/sync-stream", (req, res) => {
   });
 });
 
-// --- 1. SMART RAG SYNC FUNCTION (Live Streaming) ---
-async function buildMasterBrain() {
+// --- 1. SMART RAG SYNC FUNCTION (Live Streaming & Force Wipe Support) ---
+async function buildMasterBrain(isForceSync = false) {
   broadcastSyncUpdate("⚙️ Initializing Smart Knowledge Base Sync...", "info");
   
   try {
@@ -117,10 +117,21 @@ async function buildMasterBrain() {
     const response = await fetch(url);
     const docText = await response.text();
     
+    // 🔥 NEW LOGIC: Wipe the database completely if it's a Force Sync
+    if (isForceSync) {
+        broadcastSyncUpdate("⚠️ FORCE SYNC INITIATED: Wiping entire Supabase knowledge table...", "error");
+        await pool.query("TRUNCATE TABLE knowledge_chunks");
+        broadcastSyncUpdate("✓ Database purged. Rebuilding from scratch...", "info");
+    }
+
     broadcastSyncUpdate("🔍 Diff Analysis: Comparing Google Doc with Supabase indices...", "info");
 
-    const existingRes = await pool.query("SELECT id, content FROM knowledge_chunks");
-    const existingDbChunks = new Map(existingRes.rows.map(row => [row.content, row.id]));
+    // Fetch existing chunks ONLY if we didn't just wipe the database
+    let existingDbChunks = new Map();
+    if (!isForceSync) {
+        const existingRes = await pool.query("SELECT id, content FROM knowledge_chunks");
+        existingDbChunks = new Map(existingRes.rows.map(row => [row.content, row.id]));
+    }
 
     const rawChunks = docText.split('$$$').map(c => c.trim()).filter(c => c.length >= 20); 
     const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
@@ -490,11 +501,13 @@ app.post("/api/settings", async (req, res) => {
   }
 });
 
-// Admin Sync Button Endpoint - NOW TRIGGERS BACKGROUND STREAM
+// Admin Sync Button Endpoint - NOW SUPPORTS FORCE SYNC
 app.post("/api/sync", async (req, res) => {
   if (currentSyncStatus.active) {
     return res.status(429).json({ error: "A sync process is already running in the background." });
   }
+
+  const isForceSync = req.body.force === true;
 
   currentSyncStatus = {
     active: true,
@@ -510,7 +523,7 @@ app.post("/api/sync", async (req, res) => {
   res.json({ success: true, message: "Sync engine initialized." });
 
   // Fire and forget, runs in the background while SSE handles UI updates
-  buildMasterBrain().catch(err => {
+  buildMasterBrain(isForceSync).catch(err => {
     broadcastSyncUpdate(`🔴 Critical Engine Failure: ${err.message}`, "error");
     currentSyncStatus.active = false;
   });
