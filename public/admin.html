@@ -65,7 +65,11 @@
       <div class="section-label">AI System Instructions</div>
       <textarea id="sysInstructionInput" placeholder="Define the AI's personality..."></textarea>
       <button class="btn-save" onclick="saveSettingsToCloud()">1. Save Configurations to Cloud</button>
-      <button class="btn-sync" onclick="triggerSyncProcess()">2. Reboot & Sync AI Engine</button>
+      
+      <div style="display: flex; gap: 10px; margin-top: 10px;">
+        <button class="btn-sync" onclick="triggerSyncProcess(false)" style="flex: 2; margin-top: 0;">2. Smart Sync AI Engine (Fast)</button>
+        <button class="btn-sync" onclick="triggerSyncProcess(true)" style="flex: 1; margin-top: 0; background-color: #ef4444; border: 1px solid #7f1d1d;">Force Full Re-Sync</button>
+      </div>
       
       <div id="status"></div>
 
@@ -197,13 +201,23 @@
           };
       }
 
-      async function triggerSyncProcess() {
+      // UPDATED: Now supports the Force Wipe parameter and warning popup
+      async function triggerSyncProcess(isForce = false) {
+          if (isForce) {
+              const confirmed = confirm("⚠️ WARNING: This will permanently delete all existing chunks in your database and re-process the entire document from scratch. It will consume a large amount of your daily Gemini API tokens. Proceed?");
+              if (!confirmed) return;
+          }
+
           document.getElementById("sync-monitor-card").style.display = "block";
           const terminal = document.getElementById("ui-sync-terminal");
           terminal.innerHTML = `<div style="color: #10b981;">[Signal Sent] Booting background engine loop arrays...</div>`;
           
           try {
-              const res = await fetch("/api/sync", { method: "POST" });
+              const res = await fetch("/api/sync", { 
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ force: isForce }) 
+              });
               const outcome = await res.json();
               
               if (!outcome.success) {
