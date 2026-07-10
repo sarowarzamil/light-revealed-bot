@@ -46,15 +46,14 @@ let dynamicSystemInstruction = "";
 const guestMemoryMap = new Map(); 
 const guestRateLimitMap = new Map(); 
 
-// --- 1. RAG SYNC FUNCTION (Safe Batched Version with Metadata) ---
+// --- 1. SMART RAG SYNC FUNCTION (Differential, Native Batching & Strict Token Caps) ---
 async function buildMasterBrain() {
-  console.log("=== STARTING KNOWLEDGE BASE RAG SYNC ===");
+  console.log("=== STARTING SMART KNOWLEDGE BASE SYNC ===");
   
   try {
     const result = await pool.query("SELECT * FROM settings ORDER BY id DESC LIMIT 1");
     if (result.rows.length > 0) {
       dynamicSystemInstruction = result.rows[0].system_instruction;
-      console.log("Cloud Settings: LOADED");
     }
   } catch (err) {
     console.error("Cloud Settings Error:", err.message);
@@ -62,72 +61,123 @@ async function buildMasterBrain() {
 
   try {
     const docId = process.env.GOOGLE_DOC_ID;
-    if (docId && docId !== "your_actual_document_id_goes_here") {
-      const url = `https://docs.google.com/document/d/${docId}/export?format=txt`;
-      const response = await fetch(url);
-      const docText = await response.text();
-      
-      console.log("Google Doc Downloaded. Processing chunks...");
-
-      // Clear old database
-      await pool.query("TRUNCATE TABLE knowledge_chunks");
-
-      // Split into chunks using the custom $$$ delimiter
-      const rawChunks = docText.split('$$$').map(c => c.trim()).filter(c => c.length >= 20); 
-      const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
-
-      console.log(`Total chunks detected: ${rawChunks.length}. Syncing in safe batches...`);
-
-      let savedCount = 0;
-      const batchSize = 20; // Process chunks safely
-      let currentTab = "General"; // Default tab name
-
-      for (let i = 0; i < rawChunks.length; i += batchSize) {
-        const batch = rawChunks.slice(i, i + batchSize);
-        
-        const promises = batch.map(async (chunk) => {
-          try {
-            // Check if chunk contains a Tab Header like "=== TAB: Salat / সালাত ==="
-            const tabMatch = chunk.match(/===\s*TAB:\s*(.*?)\s*===/i);
-            if (tabMatch) {
-              currentTab = tabMatch[1].trim(); 
-            }
-
-            // Remove the tab header from the body text so it looks clean
-            let cleanChunk = chunk.replace(/===\s*TAB:.*?\s*===/gi, '').trim();
-            if (cleanChunk.length < 20) return; // Skip if it was just an empty header block
-
-            // Prefix the chunk with its Tab Name for permanent semantic binding
-            const contextualChunk = `[Domain: ${currentTab}]\n${cleanChunk}`;
-
-            // Generate vector
-            const result = await embeddingModel.embedContent(contextualChunk);
-            const embeddingString = `[${result.embedding.values.join(',')}]`;
-            
-            // Save chunk text, vector, and tab metadata to Supabase
-            await pool.query(
-              "INSERT INTO knowledge_chunks (tab_name, content, embedding) VALUES ($1, $2, $3)",
-              [currentTab, contextualChunk, embeddingString]
-            );
-            savedCount++;
-          } catch (chunkError) {
-            console.error("Chunk failed:", chunkError.message);
-          }
-        });
-
-        await Promise.all(promises);
-        
-        // Pause between batches to respect rate limits
-        await new Promise(resolve => setTimeout(resolve, 30000));
-      }
-      
-      console.log(`=== SYNC COMPLETE: Saved ${savedCount} domain-tagged chunks to Supabase ===`);
+    if (!docId || docId === "your_actual_document_id_goes_here") {
+       console.log("Google Doc ID missing. Skipping sync.");
+       return;
     }
+
+    const url = `https://docs.google.com/document/d/${docId}/export?format=txt`;
+    const response = await fetch(url);
+    const docText = await response.text();
+    
+    console.log("Google Doc Downloaded. Analyzing for changes...");
+
+    // 1. Fetch existing chunks from Supabase
+    const existingRes = await pool.query("SELECT id, content FROM knowledge_chunks");
+    const existingDbChunks = new Map(existingRes.rows.map(row => [row.content, row.id]));
+
+    // 2. Format live chunks from the Google Doc
+    const rawChunks = docText.split('$$$').map(c => c.trim()).filter(c => c.length >= 20); 
+    const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
+
+    let currentTab = "General"; 
+    const activeDocChunks = new Set();
+    const chunksToAdd = [];
+
+    for (const chunk of rawChunks) {
+       const tabMatch = chunk.match(/===\s*TAB:\s*(.*?)\s*===/i);
+       if (tabMatch) {
+          currentTab = tabMatch[1].trim(); 
+       }
+       let cleanChunk = chunk.replace(/===\s*TAB:.*?\s*===/gi, '').trim();
+       if (cleanChunk.length < 20) continue; 
+
+       const contextualChunk = `[Domain: ${currentTab}]\n${cleanChunk}`;
+       activeDocChunks.add(contextualChunk);
+       
+       if (!existingDbChunks.has(contextualChunk)) {
+          chunksToAdd.push({ tab: currentTab, text: contextualChunk });
+       }
+    }
+
+    // 3. Find chunks in DB that are NO LONGER in the Doc
+    const idsToDelete = [];
+    for (const [dbContent, dbId] of existingDbChunks.entries()) {
+       if (!activeDocChunks.has(dbContent)) {
+          idsToDelete.push(dbId);
+       }
+    }
+
+    console.log(`📊 Analysis Complete:`);
+    console.log(`- Total valid chunks in Doc: ${activeDocChunks.size}`);
+    console.log(`- New/Modified chunks to add: ${chunksToAdd.length}`);
+    console.log(`- Old chunks to remove: ${idsToDelete.length}`);
+
+    // 4. Execute Deletions instantly
+    if (idsToDelete.length > 0) {
+       const deleteQuery = `DELETE FROM knowledge_chunks WHERE id = ANY($1::int[])`;
+       await pool.query(deleteQuery, [idsToDelete]);
+       console.log(`🗑️ Deleted ${idsToDelete.length} outdated chunks from database.`);
+    }
+
+    if (chunksToAdd.length === 0) {
+      console.log("✅ SYNC COMPLETE: Database is already perfectly up to date!");
+      return;
+    }
+
+    // 5. Execute Additions using Native API Batching + Strict Token Flow Control
+    let savedCount = 0;
+    const batchSize = 10; // 🛑 Safe size: 10 chunks per single API request
+    
+    for (let i = 0; i < chunksToAdd.length; i += batchSize) {
+      const batch = chunksToAdd.slice(i, i + batchSize);
+      
+      try {
+        // Format the batch payload for the Gemini API
+        const batchRequests = batch.map(item => ({
+          content: { parts: [{ text: item.text }] }
+        }));
+        
+        // Counts as exactly ONE API request, sending 10 chunks at once
+        const result = await embeddingModel.batchEmbedContents({ requests: batchRequests });
+        
+        if (result.embeddings && result.embeddings.length === batch.length) {
+            for (let j = 0; j < batch.length; j++) {
+                const item = batch[j];
+                const embeddingString = `[${result.embeddings[j].values.join(',')}]`;
+                
+                await pool.query(
+                  "INSERT INTO knowledge_chunks (tab_name, content, embedding) VALUES ($1, $2, $3)",
+                  [item.tab, item.text, embeddingString]
+                );
+                savedCount++;
+            }
+        } else {
+             console.error("Batch embedding returned mismatched results.");
+        }
+        
+        console.log(`⏳ Batch success... (${savedCount}/${chunksToAdd.length} chunks saved)`);
+        
+        // 🛑 CRITICAL: Wait 15 seconds before the next batch.
+        // 4 batches max per minute * 10 chunks = exactly 40 chunks per minute limit!
+        if (i + batchSize < chunksToAdd.length) {
+            console.log("⏳ Enforcing strict token cooldown (15s delay)...");
+            await new Promise(resolve => setTimeout(resolve, 15000));
+        }
+        
+      } catch (batchError) {
+         console.error(`❌ Batch failed:`, batchError.message);
+         // If a batch fails due to any reason, wait a full 30 seconds before trying the next batch
+         await new Promise(resolve => setTimeout(resolve, 30000));
+      }
+    }
+    
+    console.log(`✨ SYNC COMPLETE: Successfully processed and saved ${savedCount} new chunks! ✨`);
+
   } catch (error) {
     console.error("Google Doc Source: FAILED TO LOAD", error);
   }
 }
-
 // --- 2. RAG CHAT FUNCTION (Retrieval Engine) ---
 async function processCoreAIRequest(userMessage, currentHistory) {
   
