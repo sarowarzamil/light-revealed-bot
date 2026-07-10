@@ -531,11 +531,16 @@ app.post("/api/discord/worker", async (req, res) => {
     return res.json({ success: true });
 
   } catch (error) {
-    console.error("Worker Error:", error);
+    console.error("❌ Worker Technical Failure Details:");
+    // 🔍 This prints the exact API status code, error message, and inner payload structure
+    console.error(JSON.stringify({
+      message: error.message,
+      status: error.status,
+      errorDetails: error.errorDetails || error.response || null,
+      stack: error.stack
+    }, null, 2));
     
-    // 🔥 UPDATED: Beautiful error messages for Slash Commands 🔥
     let errorMessage = "⚠️ An error occurred while contacting the Truth Engine.";
-    
     if (error.status === 429 || (error.message && error.message.includes("429"))) {
         errorMessage = "⏳ Light Revealed is currently busy. Please wait a few moments and try again.";
     } 
@@ -591,11 +596,16 @@ if (process.env.DISCORD_TOKEN) {
         await message.reply(chunk);
       }
     } catch (error) {
-      console.error("Discord Native Chat Error:", error);
+      console.error("❌ Native Chat Technical Failure Details:");
+      // 🔍 This prints the exact API status code, error message, and inner payload structure
+      console.error(JSON.stringify({
+        message: error.message,
+        status: error.status,
+        errorDetails: error.errorDetails || error.response || null,
+        stack: error.stack
+      }, null, 2));
       
-      // 🔥 UPDATED: Beautiful error messages for Native Chat 🔥
       let errorMessage = "⚠️ An error occurred while processing your request.";
-      
       if (error.status === 429 || (error.message && error.message.includes("429"))) {
           errorMessage = "⏳ Light Revealed is currently busy. Please wait a few moments and try again.";
       } 
