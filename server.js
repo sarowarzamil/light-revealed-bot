@@ -46,37 +46,82 @@ let dynamicSystemInstruction = "";
 const guestMemoryMap = new Map(); 
 const guestRateLimitMap = new Map(); 
 
-// --- 1. SMART RAG SYNC FUNCTION (Differential, Native Batching & Strict Token Caps) ---
+// ==========================================
+// --- LIVE SYNC TRACKING STATE (SSE) ---
+// ==========================================
+let currentSyncStatus = {
+  active: false,
+  totalDocChunks: 0,
+  toAdd: 0,
+  toDelete: 0,
+  saved: 0,
+  failed: 0,
+  logs: [],
+  complete: false
+};
+
+let syncClients = [];
+
+function broadcastSyncUpdate(message, type = "info") {
+  const timestamp = new Date().toLocaleTimeString();
+  const formattedLog = `[${timestamp}] ${message}`;
+  
+  currentSyncStatus.logs.push(formattedLog);
+  console.log(message); 
+
+  syncClients.forEach(client => {
+    client.res.write(`data: ${JSON.stringify({ ...currentSyncStatus, latestLog: formattedLog, logType: type })}\n\n`);
+  });
+}
+
+app.get("/api/sync-stream", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  res.write(`data: ${JSON.stringify(currentSyncStatus)}\n\n`);
+
+  const clientId = Date.now();
+  syncClients.push({ id: clientId, res });
+
+  req.on("close", () => {
+    syncClients = syncClients.filter(c => c.id !== clientId);
+  });
+});
+
+// --- 1. SMART RAG SYNC FUNCTION (Live Streaming) ---
 async function buildMasterBrain() {
-  console.log("=== STARTING SMART KNOWLEDGE BASE SYNC ===");
+  broadcastSyncUpdate("⚙️ Initializing Smart Knowledge Base Sync...", "info");
   
   try {
     const result = await pool.query("SELECT * FROM settings ORDER BY id DESC LIMIT 1");
     if (result.rows.length > 0) {
       dynamicSystemInstruction = result.rows[0].system_instruction;
+      broadcastSyncUpdate("✓ Dynamic System Instructions updated from settings table.", "info");
     }
   } catch (err) {
-    console.error("Cloud Settings Error:", err.message);
+    broadcastSyncUpdate(`⚠️ Cloud Settings Error: ${err.message}`, "error");
   }
 
   try {
     const docId = process.env.GOOGLE_DOC_ID;
     if (!docId || docId === "your_actual_document_id_goes_here") {
-       console.log("Google Doc ID missing. Skipping sync.");
+       broadcastSyncUpdate("❌ Sync Aborted: GOOGLE_DOC_ID is missing in environment variables.", "error");
+       currentSyncStatus.active = false;
        return;
     }
 
+    broadcastSyncUpdate("📥 Downloading Google Document payload...", "info");
     const url = `https://docs.google.com/document/d/${docId}/export?format=txt`;
     const response = await fetch(url);
     const docText = await response.text();
     
-    console.log("Google Doc Downloaded. Analyzing for changes...");
+    broadcastSyncUpdate("🔍 Diff Analysis: Comparing Google Doc with Supabase indices...", "info");
 
-    // 1. Fetch existing chunks from Supabase
     const existingRes = await pool.query("SELECT id, content FROM knowledge_chunks");
     const existingDbChunks = new Map(existingRes.rows.map(row => [row.content, row.id]));
 
-    // 2. Format live chunks from the Google Doc
     const rawChunks = docText.split('$$$').map(c => c.trim()).filter(c => c.length >= 20); 
     const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
 
@@ -100,7 +145,6 @@ async function buildMasterBrain() {
        }
     }
 
-    // 3. Find chunks in DB that are NO LONGER in the Doc
     const idsToDelete = [];
     for (const [dbContent, dbId] of existingDbChunks.entries()) {
        if (!activeDocChunks.has(dbContent)) {
@@ -108,37 +152,37 @@ async function buildMasterBrain() {
        }
     }
 
-    console.log(`📊 Analysis Complete:`);
-    console.log(`- Total valid chunks in Doc: ${activeDocChunks.size}`);
-    console.log(`- New/Modified chunks to add: ${chunksToAdd.length}`);
-    console.log(`- Old chunks to remove: ${idsToDelete.length}`);
+    currentSyncStatus.totalDocChunks = activeDocChunks.size;
+    currentSyncStatus.toAdd = chunksToAdd.length;
+    currentSyncStatus.toDelete = idsToDelete.length;
 
-    // 4. Execute Deletions instantly
+    broadcastSyncUpdate(`📊 Target Metrics: Doc Total: ${activeDocChunks.size} | New: ${chunksToAdd.length} | Obsolete: ${idsToDelete.length}`);
+
     if (idsToDelete.length > 0) {
+       broadcastSyncUpdate(`🗑️ Flushing ${idsToDelete.length} obsolete chunks from Supabase...`);
        const deleteQuery = `DELETE FROM knowledge_chunks WHERE id = ANY($1::int[])`;
        await pool.query(deleteQuery, [idsToDelete]);
-       console.log(`🗑️ Deleted ${idsToDelete.length} outdated chunks from database.`);
+       broadcastSyncUpdate(`✓ Cache cleanup successful.`);
     }
 
     if (chunksToAdd.length === 0) {
-      console.log("✅ SYNC COMPLETE: Database is already perfectly up to date!");
+      currentSyncStatus.active = false;
+      currentSyncStatus.complete = true;
+      broadcastSyncUpdate("✅ SYNC COMPLETE: Database matches your Google Doc perfectly. No embedding requests needed!", "success");
       return;
     }
 
-    // 5. Execute Additions using Native API Batching + Strict Token Flow Control
-    let savedCount = 0;
-    const batchSize = 10; // 🛑 Safe size: 10 chunks per single API request
+    const batchSize = 10; 
+    broadcastSyncUpdate(`🚀 Commencing Gemini API embedding calculations in blocks of ${batchSize}...`);
     
     for (let i = 0; i < chunksToAdd.length; i += batchSize) {
       const batch = chunksToAdd.slice(i, i + batchSize);
       
       try {
-        // Format the batch payload for the Gemini API
         const batchRequests = batch.map(item => ({
           content: { parts: [{ text: item.text }] }
         }));
         
-        // Counts as exactly ONE API request, sending 10 chunks at once
         const result = await embeddingModel.batchEmbedContents({ requests: batchRequests });
         
         if (result.embeddings && result.embeddings.length === batch.length) {
@@ -150,45 +194,45 @@ async function buildMasterBrain() {
                   "INSERT INTO knowledge_chunks (tab_name, content, embedding) VALUES ($1, $2, $3)",
                   [item.tab, item.text, embeddingString]
                 );
-                savedCount++;
+                currentSyncStatus.saved++;
             }
+            broadcastSyncUpdate(`⚡ Batch complete: Saved progress (${currentSyncStatus.saved}/${chunksToAdd.length} chunks calculated)`);
         } else {
-             console.error("Batch embedding returned mismatched results.");
+             throw new Error("API returned mismatched array dimensional block lengths.");
         }
         
-        console.log(`⏳ Batch success... (${savedCount}/${chunksToAdd.length} chunks saved)`);
-        
-        // 🛑 CRITICAL: Wait 15 seconds before the next batch.
-        // 4 batches max per minute * 10 chunks = exactly 40 chunks per minute limit!
         if (i + batchSize < chunksToAdd.length) {
-            console.log("⏳ Enforcing strict token cooldown (15s delay)...");
+            broadcastSyncUpdate("⏳ Cooldown period triggered: Sleeping 15 seconds to stay under Token limits...", "info");
             await new Promise(resolve => setTimeout(resolve, 15000));
         }
         
       } catch (batchError) {
-         console.error(`❌ Batch failed:`, batchError.message);
-         // If a batch fails due to any reason, wait a full 30 seconds before trying the next batch
+         currentSyncStatus.failed += batch.length;
+         broadcastSyncUpdate(`❌ Rate-Limit/API Error processing block [index ${i}]: ${batchError.message}`, "error");
+         broadcastSyncUpdate("⏳ Safety buffer activated: 30-second cooldown recovery sleep...", "info");
          await new Promise(resolve => setTimeout(resolve, 30000));
       }
     }
     
-    console.log(`✨ SYNC COMPLETE: Successfully processed and saved ${savedCount} new chunks! ✨`);
+    currentSyncStatus.active = false;
+    currentSyncStatus.complete = true;
+    broadcastSyncUpdate(`✨ SYNC SESSION ENDED: Successfully verified ${currentSyncStatus.saved} saved | ${currentSyncStatus.failed} failed items. ✨`, "success");
 
   } catch (error) {
-    console.error("Google Doc Source: FAILED TO LOAD", error);
+    currentSyncStatus.active = false;
+    broadcastSyncUpdate(`🔥 Global sync processing pipeline crashed: ${error.message}`, "error");
   }
 }
+
 // --- 2. RAG CHAT FUNCTION (Retrieval Engine) ---
 async function processCoreAIRequest(userMessage, currentHistory) {
   
-  // Convert question to vector
   const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
   const embedResult = await embeddingModel.embedContent(userMessage);
   const queryVector = `[${embedResult.embedding.values.join(',')}]`;
 
   let contextText = "";
   try {
-    // Fetch the top 16 most relevant chunks
     const searchRes = await pool.query(`
       SELECT content 
       FROM knowledge_chunks 
@@ -281,6 +325,7 @@ function splitMessage(text, maxLength = 1950) {
   }
   return chunks;
 }
+
 
 // --- AUTHENTICATION ROUTES ---
 app.post("/signup", async (req, res) => {
@@ -445,11 +490,30 @@ app.post("/api/settings", async (req, res) => {
   }
 });
 
-// Admin Sync Button Endpoint
-app.all("/api/sync", async (req, res) => {
-  // Triggers sync safely in the background on Render
-  buildMasterBrain().catch(err => console.error("Background Sync Error:", err));
-  res.json({ success: true, message: "Sync started in background! Check server logs for progress." });
+// Admin Sync Button Endpoint - NOW TRIGGERS BACKGROUND STREAM
+app.post("/api/sync", async (req, res) => {
+  if (currentSyncStatus.active) {
+    return res.status(429).json({ error: "A sync process is already running in the background." });
+  }
+
+  currentSyncStatus = {
+    active: true,
+    totalDocChunks: 0,
+    toAdd: 0,
+    toDelete: 0,
+    saved: 0,
+    failed: 0,
+    logs: [],
+    complete: false
+  };
+
+  res.json({ success: true, message: "Sync engine initialized." });
+
+  // Fire and forget, runs in the background while SSE handles UI updates
+  buildMasterBrain().catch(err => {
+    broadcastSyncUpdate(`🔴 Critical Engine Failure: ${err.message}`, "error");
+    currentSyncStatus.active = false;
+  });
 });
 
 app.get("/api/users", async (req, res) => {
@@ -471,8 +535,9 @@ app.post("/api/update-limit", async (req, res) => {
   }
 });
 
+
 // ==========================================
-// --- DISCORD BOT INTEGRATION (SLASH COMMAND) ---
+// --- DISCORD BOT INTEGRATION (SERVERLESS) ---
 // ==========================================
 
 app.get("/api/discord/register", async (req, res) => {
@@ -508,6 +573,7 @@ app.get("/api/discord/register", async (req, res) => {
   }
 });
 
+
 app.post("/api/discord", async (req, res) => {
   const signature = req.headers["x-signature-ed25519"];
   const timestamp = req.headers["x-signature-timestamp"];
@@ -535,7 +601,7 @@ app.post("/api/discord", async (req, res) => {
       userName: interaction.member.user.username
     };
 
-    const workerUrl = `http://localhost:${process.env.PORT || 3000}/api/discord/worker`;
+    const workerUrl = `https://${req.headers.host}/api/discord/worker`;
     fetch(workerUrl, {
       method: 'POST',
       headers: { 
@@ -550,7 +616,7 @@ app.post("/api/discord", async (req, res) => {
   }
 });
 
-// >>>>> THIS IS THE SLASH COMMAND WORKER BLOCK YOU WERE LOOKING FOR <<<<<
+
 app.post("/api/discord/worker", async (req, res) => {
   const authHeader = req.headers['x-bot-auth'];
   if (authHeader !== (process.env.JWT_SECRET || 'fallback_secret')) {
@@ -560,7 +626,15 @@ app.post("/api/discord/worker", async (req, res) => {
   const { token, userMessage, userName } = req.body;
 
   try {
-    const botReply = await processCoreAIRequestWithRetry(userMessage, []);
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error("VERCEL_TIMEOUT")), 55000); 
+    });
+
+    const botReply = await Promise.race([
+      processCoreAIRequestWithRetry(userMessage, []),
+      timeoutPromise
+    ]);
+
     const fullResponse = `**${userName} asked:** "${userMessage}"\n\n${botReply}`;
     const messageChunks = splitMessage(fullResponse);
 
@@ -582,7 +656,6 @@ app.post("/api/discord/worker", async (req, res) => {
 
   } catch (error) {
     console.error("❌ Worker Technical Failure Details:");
-    // 🔍 This prints the exact API status code, error message, and inner payload structure
     console.error(JSON.stringify({
       message: error.message,
       status: error.status,
@@ -591,8 +664,12 @@ app.post("/api/discord/worker", async (req, res) => {
     }, null, 2));
     
     let errorMessage = "⚠️ An error occurred while contacting the Truth Engine.";
-    if (error.status === 429 || (error.message && error.message.includes("429"))) {
-        errorMessage = "⏳ Light Revealed is currently busy. Please wait a few moments and try again.";
+    
+    if (error.message === "VERCEL_TIMEOUT") {
+        errorMessage = "⏳ The question was a bit too complex and I ran out of time to think. Please try asking a slightly more specific question!";
+    }
+    else if (error.status === 429 || (error.message && error.message.includes("429"))) {
+        errorMessage = `⏳ Light Revealed is currently busy. Please wait a few moments and try again.`;
     } 
     else if (error.status === 503 || (error.message && error.message.includes("503"))) {
         errorMessage = "🔥 Light Revealed server is currently experiencing high demand. Please try again in a minute.";
@@ -604,9 +681,10 @@ app.post("/api/discord/worker", async (req, res) => {
       body: JSON.stringify({ content: errorMessage })
     });
 
-    return res.status(500).json({ error: "Worker failed" });
+    return res.status(500).json({ error: "Worker failed or timed out" });
   }
 });
+
 
 // ==========================================
 // --- DISCORD BOT (NATIVE PERSISTENT CHAT) ---
@@ -621,7 +699,7 @@ if (process.env.DISCORD_TOKEN) {
     ]
   });
 
-  discordClient.on('ready', () => {
+  discordClient.on('clientReady', () => {
     console.log(`🤖 Discord Bot connected as: ${discordClient.user.tag}`);
   });
 
@@ -630,7 +708,7 @@ if (process.env.DISCORD_TOKEN) {
 
     // 🔒 CHANNEL LOCK: Only process messages in your dedicated channel
     if (process.env.DISCORD_CHANNEL_ID && message.channel.id !== process.env.DISCORD_CHANNEL_ID) {
-      return; // Ignores all other channels immediately
+      return; 
     }
 
     try {
@@ -647,7 +725,6 @@ if (process.env.DISCORD_TOKEN) {
       }
     } catch (error) {
       console.error("❌ Native Chat Technical Failure Details:");
-      // 🔍 This prints the exact API status code, error message, and inner payload structure
       console.error(JSON.stringify({
         message: error.message,
         status: error.status,
@@ -672,9 +749,6 @@ if (process.env.DISCORD_TOKEN) {
   });
 }
 
-// ==========================================
-// --- SERVER LISTENER FOR RENDER ---
-// ==========================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\n✨ LIGHT REVEALED CLOUD ENGINE OPERATIONAL ON PORT ${PORT} ✨`);
