@@ -711,19 +711,34 @@ if (process.env.DISCORD_TOKEN) {
       return; 
     }
 
+    // 1. Send the initial typing indicator
+    await message.channel.sendTyping();
+    
+    // 2. Set up a loop to refresh the typing indicator every 9 seconds
+    const typingInterval = setInterval(() => {
+        message.channel.sendTyping().catch(console.error);
+    }, 9000);
+
     try {
-      await message.channel.sendTyping();
-      
       const userQuery = message.content.replace(/<@!?\d+>/g, '').trim();
-      if (!userQuery) return;
+      if (!userQuery) {
+          clearInterval(typingInterval); // Stop typing if message is empty
+          return;
+      }
 
       const botReply = await processCoreAIRequestWithRetry(userQuery, []);
       const chunks = splitMessage(botReply);
+
+      // 3. The AI has finished thinking! Stop the typing loop immediately.
+      clearInterval(typingInterval);
 
       for (const chunk of chunks) {
         await message.reply(chunk);
       }
     } catch (error) {
+      // 🛑 Ensure the typing loop stops if an error crashes the process
+      clearInterval(typingInterval);
+      
       console.error("❌ Native Chat Technical Failure Details:");
       console.error(JSON.stringify({
         message: error.message,
