@@ -698,7 +698,7 @@
             
             actionBarHTML = `<div class="action-bar">
                 <button class="action-btn" title="Copy" data-text="${safeText}" onclick="handleCopy(this)">${COPY_ICON}</button>
-                ${sender === 'bot' ? `<button class="action-btn bookmark-btn ${activeClass}" data-prompt="${safePrompt}" data-response="${safeText}" title="Bookmark" onclick="handleBookmark(this)">${BOOKMARK_ICON}</button>` : ''}
+                ${sender === 'bot' || sender === 'model' ? `<button class="action-btn bookmark-btn ${activeClass}" data-prompt="${safePrompt}" data-response="${safeText}" title="Bookmark" onclick="handleBookmark(this)">${BOOKMARK_ICON}</button>` : ''}
             </div>`;
         }
 
