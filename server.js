@@ -417,7 +417,7 @@ app.get("/bookmarks", authenticateToken, async (req, res) => {
   if (!req.user) return res.json({ bookmarks: [] });
   try {
     const result = await pool.query(
-      "SELECT message_id as id, prompt, response FROM bookmarks WHERE user_id = $1 ORDER BY created_at ASC",
+      "SELECT id, prompt, response FROM bookmarks WHERE user_id = $1 ORDER BY created_at ASC",
       [req.user.id]
     );
     res.json({ bookmarks: result.rows });
@@ -429,21 +429,22 @@ app.get("/bookmarks", authenticateToken, async (req, res) => {
 app.post("/bookmarks", authenticateToken, async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Unauthorized" });
   
-  const { messageId, prompt, response } = req.body;
-  if (!messageId || !prompt || !response) {
+  const { prompt, response } = req.body;
+  
+  if (!prompt || !response) {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
   try {
-    const checkRes = await pool.query("SELECT id FROM bookmarks WHERE user_id = $1 AND message_id = $2", [req.user.id, messageId]);
+    const checkRes = await pool.query("SELECT id FROM bookmarks WHERE user_id = $1 AND prompt = $2 AND response = $3", [req.user.id, prompt, response]);
     
     if (checkRes.rows.length > 0) {
-      await pool.query("DELETE FROM bookmarks WHERE user_id = $1 AND message_id = $2", [req.user.id, messageId]);
+      await pool.query("DELETE FROM bookmarks WHERE user_id = $1 AND prompt = $2 AND response = $3", [req.user.id, prompt, response]);
       res.json({ success: true, action: "removed" });
     } else {
       await pool.query(
-        "INSERT INTO bookmarks (user_id, message_id, prompt, response) VALUES ($1, $2, $3, $4)",
-        [req.user.id, messageId, prompt, response]
+        "INSERT INTO bookmarks (user_id, prompt, response) VALUES ($1, $2, $3)",
+        [req.user.id, prompt, response]
       );
       res.json({ success: true, action: "added" });
     }
