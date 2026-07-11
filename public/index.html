@@ -204,10 +204,7 @@
       input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; margin-top: 2px; }
       /* Bookmark Expand/Collapse Styles */
       .bookmark-response.collapsed {
-        display: -webkit-box;
-        -webkit-line-clamp: 3; 
-        -webkit-box-orient: vertical;
-        max-height: 62px; /* Smoothly snaps to ~3 lines */
+        max-height: 80px; /* Gives perfect vertical space for roughly 50 words */
       }
       .expand-btn {
         background: none; border: none; color: var(--text-muted); cursor: pointer;
@@ -615,38 +612,61 @@
       // --- ADVANCED MODAL FUNCTIONS ---
 
       function populateBookmarksModal() {
-        const body = document.getElementById("bookmarksModalBody");
-        const selectAllCheckbox = document.getElementById("selectAllCheckbox");
-        if (selectAllCheckbox) selectAllCheckbox.checked = false; // Reset master checkbox
+  const body = document.getElementById("bookmarksModalBody");
+  const selectAllCheckbox = document.getElementById("selectAllCheckbox");
+  if (selectAllCheckbox) selectAllCheckbox.checked = false; // Reset master checkbox
 
-        body.innerHTML = "";
-        if (bookmarks.length === 0) {
-          body.innerHTML = `<p style="text-align: center; color: var(--text-muted);">You haven't bookmarked any responses yet.</p>`;
-          return;
-        }
-        
-        bookmarks.slice().reverse().forEach(bm => {
-          const card = document.createElement("div");
-          card.className = "bookmark-card";
-          card.innerHTML = `
-            <input type="checkbox" class="bookmark-checkbox" data-prompt="${encodeURIComponent(bm.prompt)}" data-response="${encodeURIComponent(bm.response)}" onchange="updateSelectAllState()">
-            <div style="flex: 1; min-width: 0; display: flex; flex-direction: column;">
-                <div class="bookmark-prompt">Q: ${bm.prompt}</div>
-                <div class="bookmark-response collapsed">${bm.response}</div>
-                <button class="expand-btn" onclick="toggleExpand(this)">
-                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                </button>
-            </div>
-          `;
-          body.appendChild(card);
-        });
-      }
+  body.innerHTML = "";
+  if (bookmarks.length === 0) {
+    body.innerHTML = `<p style="text-align: center; color: var(--text-muted);">You haven't bookmarked any responses yet.</p>`;
+    return;
+  }
+  
+  bookmarks.slice().reverse().forEach(bm => {
+    const card = document.createElement("div");
+    card.className = "bookmark-card";
+    
+    // Clean up text and split it cleanly by blank spaces to count raw words
+    const words = bm.response.trim().split(/\s+/);
+    const needsCollapse = words.length > 50;
+    
+    // Generate a clean snippet of exactly the first 50 words
+    const displayResponse = needsCollapse 
+      ? words.slice(0, 50).join(" ") + "..." 
+      : bm.response;
+
+    card.innerHTML = `
+      <input type="checkbox" class="bookmark-checkbox" data-prompt="${encodeURIComponent(bm.prompt)}" data-response="${encodeURIComponent(bm.response)}" onchange="updateSelectAllState()">
+      <div style="flex: 1; min-width: 0; display: flex; flex-direction: column;">
+          <div class="bookmark-prompt">Q: ${bm.prompt}</div>
+          <div class="bookmark-response collapsed" data-full="${encodeURIComponent(bm.response)}" data-short="${encodeURIComponent(displayResponse)}">${displayResponse}</div>
+          ${needsCollapse ? `
+          <button class="expand-btn" onclick="toggleExpand(this)">
+             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </button>` : ''}
+      </div>
+    `;
+    body.appendChild(card);
+  });
+}
 
       function toggleExpand(btn) {
-        const responseDiv = btn.previousElementSibling;
-        responseDiv.classList.toggle("collapsed");
-        btn.classList.toggle("open");
-      }
+  const responseDiv = btn.previousElementSibling;
+  const isCollapsed = responseDiv.classList.contains("collapsed");
+  
+  const fullText = decodeURIComponent(responseDiv.getAttribute("data-full"));
+  const shortText = decodeURIComponent(responseDiv.getAttribute("data-short"));
+
+  if (isCollapsed) {
+      responseDiv.innerText = fullText;
+      responseDiv.classList.remove("collapsed");
+      btn.classList.add("open");
+  } else {
+      responseDiv.innerText = shortText;
+      responseDiv.classList.add("collapsed");
+      btn.classList.remove("open");
+  }
+}
 
       function toggleSelectAll(masterCheckbox) {
         const checkboxes = document.querySelectorAll(".bookmark-checkbox");
