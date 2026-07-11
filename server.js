@@ -75,7 +75,7 @@ function broadcastSyncUpdate(message, type = "info") {
 }
 
 app.get("/api/sync-stream", (req, res) => {
-  res.setHeader("Content-Type", "text-event-stream");
+  res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
@@ -477,38 +477,6 @@ app.post("/chat", authenticateToken, async (req, res) => {
     res.status(500).json({ reply: "দুঃখিত, অভ্যন্তরীণ প্রক্রিয়াকরণে সমস্যা হয়েছে।" });
   }
 });
-
-// ==========================================
-// --- NEW: BOOKMARK ROUTES ---
-// ==========================================
-app.post("/api/bookmarks", authenticateToken, async (req, res) => {
-    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-    const { prompt, response } = req.body;
-    try {
-        await pool.query(
-            "INSERT INTO bookmarks (user_id, prompt, response) VALUES ($1, $2, $3)", 
-            [req.user.id, prompt, response]
-        );
-        res.json({ success: true });
-    } catch (e) {
-        console.error("Bookmark Error:", e);
-        res.status(500).json({ error: "Failed to save bookmark." });
-    }
-});
-
-app.get("/api/bookmarks", authenticateToken, async (req, res) => {
-    if (!req.user) return res.json({ bookmarks: [] });
-    try {
-        const result = await pool.query(
-            "SELECT * FROM bookmarks WHERE user_id = $1 ORDER BY created_at DESC", 
-            [req.user.id]
-        );
-        res.json({ bookmarks: result.rows });
-    } catch (e) {
-        res.status(500).json({ error: "Failed to fetch bookmarks." });
-    }
-});
-// ==========================================
 
 // --- ADMIN API ---
 app.get("/api/settings", async (req, res) => {
