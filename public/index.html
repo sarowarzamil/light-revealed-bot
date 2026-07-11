@@ -63,9 +63,17 @@
       .section-label { font-size: 12px; color: var(--text-muted); font-weight: 600; margin-bottom: 10px; padding-left: 5px; text-transform: uppercase; letter-spacing: 0.5px; }
       .history-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding-right: 5px; }
       
+      /* FIXED BENGALI TEXT CLIPPING: Normal line height & extra bottom padding */
       .history-item {
-        padding: 12px 10px; font-size: 13px; color: var(--text-main); border-radius: 6px; cursor: pointer;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5;
+        padding: 14px 10px; 
+        font-size: 14px; 
+        color: var(--text-main); 
+        border-radius: 6px; 
+        cursor: pointer;
+        white-space: nowrap; 
+        overflow: hidden; 
+        text-overflow: ellipsis; 
+        line-height: normal; 
         transition: background-color 0.2s;
       }
       .history-item:hover { background-color: var(--hover-bg); }
@@ -74,7 +82,7 @@
       /* Bookmarks Section */
       .bookmarks-section { flex: 1; display: flex; flex-direction: column; border-top: 1px solid var(--border); padding-top: 15px; margin-top: 10px; overflow: hidden; }
       .bookmarks-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
-      .bookmark-item { padding: 10px; font-size: 13px; color: var(--text-main); border-radius: 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 8px; line-height: 1.5; }
+      .bookmark-item { padding: 12px 10px; font-size: 13px; color: var(--text-main); border-radius: 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 8px; line-height: normal; }
       .bookmark-item:hover { background-color: var(--hover-bg); }
       .show-all-btn { width: 100%; padding: 8px; font-size: 12px; color: var(--accent); background: transparent; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; transition: all 0.2s; }
       .show-all-btn:hover { background: rgba(59, 130, 246, 0.1); border-color: var(--accent); }
@@ -101,7 +109,7 @@
       .user .avatar { background-color: #5436da; }
       
       .text-and-actions { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-      .text-wrapper { white-space: pre-wrap; line-height: 1.6; }
+      .text-wrapper { white-space: pre-wrap; line-height: 1.7; }
       
       .message-row.bot .text-wrapper { animation: fadeIn 0.4s ease-in-out; }
       @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
@@ -132,7 +140,7 @@
       /* Sleek Action Icons */
       .action-bar { display: flex; gap: 6px; opacity: 0; transition: opacity 0.2s ease; margin-top: 4px; }
       .message-row:hover .action-bar { opacity: 1; }
-      .action-btn { background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 6px; border-radius: 4px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+      .action-btn { background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 6px 8px; border-radius: 4px; display: flex; align-items: center; gap: 6px; transition: all 0.2s; font-family: "Inter", sans-serif; }
       .action-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-main); }
       .action-btn.active { color: var(--accent); }
 
@@ -277,6 +285,7 @@
       let lastUserPrompt = ""; 
 
       const COPY_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
+      const COPY_SUCCESS_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
       const BOOKMARK_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>`;
 
       function toggleSidebar() {
@@ -442,13 +451,86 @@
         updateProfileUI(); historyList.innerHTML = ""; bookmarks = []; renderSidebarBookmarks(); startNewChat();
       }
 
-      function copyToClipboard(text, btn) {
-        navigator.clipboard.writeText(text).then(() => {
-          const originalHTML = btn.innerHTML;
-          btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
-          setTimeout(() => btn.innerHTML = originalHTML, 2000);
-        });
+      // ----------------------------------------------------
+      // Sleek Inline Feedback Handlers (No Popups!)
+      // ----------------------------------------------------
+      
+      function handleCopy(btn) {
+        const text = decodeURIComponent(btn.getAttribute('data-text'));
+        const originalHTML = COPY_ICON; // Safely reference constant
+
+        const showFeedback = () => {
+          btn.innerHTML = `${COPY_SUCCESS_ICON} <span style="font-size: 12px; color: #10b981; font-weight: 500;">Copied</span>`;
+          setTimeout(() => { btn.innerHTML = originalHTML; }, 2000);
+        };
+
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(text).then(showFeedback);
+        } else {
+            let textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.position = "fixed";
+            textArea.style.left = "-999999px";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try { 
+                document.execCommand('copy'); 
+                showFeedback(); 
+            } catch (err) { 
+                btn.innerHTML = `<span style="font-size: 12px; color: #ef4444;">Failed</span>`;
+                setTimeout(() => { btn.innerHTML = originalHTML; }, 2000);
+            }
+            textArea.remove();
+        }
       }
+
+      async function handleBookmark(btn) {
+        const originalHTML = BOOKMARK_ICON;
+        
+        if (!token) {
+           btn.innerHTML = `<span style="font-size: 12px;">Sign in first</span>`;
+           setTimeout(() => { btn.innerHTML = originalHTML; }, 2000);
+           return;
+        }
+
+        const prompt = decodeURIComponent(btn.getAttribute('data-prompt'));
+        const response = decodeURIComponent(btn.getAttribute('data-response'));
+        
+        const isCurrentlyActive = btn.classList.contains('active');
+
+        // Optimistically update UI State immediately
+        if (isCurrentlyActive) {
+            btn.classList.remove('active');
+            btn.innerHTML = `${BOOKMARK_ICON} <span style="font-size: 12px;">Removed</span>`;
+        } else {
+            btn.classList.add('active');
+            btn.innerHTML = `${BOOKMARK_ICON} <span style="font-size: 12px;">Saved</span>`;
+        }
+
+        // Revert text to icon-only after animation finishes
+        setTimeout(() => { btn.innerHTML = BOOKMARK_ICON; }, 2000);
+
+        try {
+          const res = await fetch("/bookmarks", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ prompt, response }),
+          });
+          
+          if (res.ok) {
+             fetchBookmarks(); // Sync database changes to local sidebar
+          } else {
+             // Revert active class if server rejects it
+             btn.classList.toggle('active'); 
+          }
+        } catch (e) {
+          btn.classList.toggle('active');
+          console.error("Bookmark toggle failed");
+        }
+      }
+
+      // ----------------------------------------------------
 
       async function fetchBookmarks() {
         if (!token) return;
@@ -463,42 +545,15 @@
         } catch (e) { console.log("Failed to fetch bookmarks"); }
       }
 
-      async function toggleBookmark(prompt, response, btnElement) {
-        if (!token) {
-           alert("Please sign in to save bookmarks.");
-           return;
-        }
-
-        const isCurrentlyActive = btnElement.classList.contains('active');
-        if (isCurrentlyActive) {
-            btnElement.classList.remove('active');
-        } else {
-            btnElement.classList.add('active');
-        }
-
-        try {
-          const res = await fetch("/bookmarks", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-            body: JSON.stringify({ prompt, response }),
-          });
-          
-          if (res.ok) {
-             fetchBookmarks();
-          } else {
-             btnElement.classList.toggle('active');
-          }
-        } catch (e) {
-          btnElement.classList.toggle('active');
-          console.error("Bookmark toggle failed");
-        }
-      }
-
       function updateBookmarkButtons() {
         document.querySelectorAll('.bookmark-btn').forEach(btn => {
-           const prompt = btn.getAttribute('data-prompt');
-           const response = btn.getAttribute('data-response');
+           const prompt = decodeURIComponent(btn.getAttribute('data-prompt'));
+           const response = decodeURIComponent(btn.getAttribute('data-response'));
            const isBookmarked = bookmarks.some(b => b.prompt === prompt && b.response === response);
+           
+           // Ensure buttons reset to their icon string gracefully
+           btn.innerHTML = BOOKMARK_ICON;
+           
            if (isBookmarked) {
               btn.classList.add('active');
            } else {
@@ -596,12 +651,15 @@
 
         let actionBarHTML = '';
         if (!isTyping) {
+            // Encode safely so quotes don't break HTML attributes!
+            const safeText = encodeURIComponent(text);
+            const safePrompt = encodeURIComponent(promptToSave);
             const isBookmarked = bookmarks.some(b => b.prompt === promptToSave && b.response === text);
             const activeClass = isBookmarked ? 'active' : '';
             
             actionBarHTML = `<div class="action-bar">
-                <button class="action-btn" title="Copy" onclick='copyToClipboard(${JSON.stringify(text)}, this)'>${COPY_ICON}</button>
-                ${sender === 'bot' ? `<button class="action-btn bookmark-btn ${activeClass}" data-prompt='${promptToSave.replace(/'/g, "&#39;")}' data-response='${text.replace(/'/g, "&#39;")}' title="Bookmark" onclick='toggleBookmark(${JSON.stringify(promptToSave)}, ${JSON.stringify(text)}, this)'>${BOOKMARK_ICON}</button>` : ''}
+                <button class="action-btn" title="Copy" data-text="${safeText}" onclick="handleCopy(this)">${COPY_ICON}</button>
+                ${sender === 'bot' ? `<button class="action-btn bookmark-btn ${activeClass}" data-prompt="${safePrompt}" data-response="${safeText}" title="Bookmark" onclick="handleBookmark(this)">${BOOKMARK_ICON}</button>` : ''}
             </div>`;
         }
 
@@ -646,10 +704,13 @@
             currentIndex++;
           } else {
             clearInterval(interval);
+            const safeText = encodeURIComponent(fullText);
+            const safePrompt = encodeURIComponent(promptToSave);
+            
             textActionsBox.insertAdjacentHTML('beforeend', `
               <div class="action-bar">
-                  <button class="action-btn" title="Copy" onclick='copyToClipboard(${JSON.stringify(fullText)}, this)'>${COPY_ICON}</button>
-                  <button class="action-btn bookmark-btn" data-prompt='${promptToSave.replace(/'/g, "&#39;")}' data-response='${fullText.replace(/'/g, "&#39;")}' title="Bookmark" onclick='toggleBookmark(${JSON.stringify(promptToSave)}, ${JSON.stringify(fullText)}, this)'>${BOOKMARK_ICON}</button>
+                  <button class="action-btn" title="Copy" data-text="${safeText}" onclick="handleCopy(this)">${COPY_ICON}</button>
+                  <button class="action-btn bookmark-btn" data-prompt="${safePrompt}" data-response="${safeText}" title="Bookmark" onclick="handleBookmark(this)">${BOOKMARK_ICON}</button>
               </div>
             `);
             if (token) fetchSidebarSessions();
