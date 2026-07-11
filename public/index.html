@@ -1,9 +1,780 @@
+Here are the fully updated, copy-paste-ready files that implement all 5 of your requested upgrades!
+
+### ⚠️ IMPORTANT: Database Requirement First
+
+Because you are adding a **Bookmarks** feature, your backend needs a place to store those saved posts. Before you test this code, you **MUST** run this SQL command in your **Supabase SQL Editor** to create the new table:
+
+```sql
+CREATE TABLE bookmarks (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    prompt TEXT NOT NULL,
+    response TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+```
+
+---
+
+### **1. The Updated `server.js**`
+
+I have added the two new endpoints (`POST /api/bookmarks` and `GET /api/bookmarks`) right below your session/chat routes.
+
+```javascript
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const path = require('path');
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { Pool } = require("pg");
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
+const { verifyKey } = require("discord-interactions"); 
+const { Client, GatewayIntentBits } = require("discord.js");
+
+const app = express();
+app.use(cors());
+
+// --- CRITICAL DISCORD UPDATE: Captures raw body for security verification ---
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf; 
+  }
+}));
+
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/admin.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+// --- SUPABASE CLOUD DATABASE SETUP ---
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }, 
+});
+
+pool.connect((err) => {
+  if (err) console.error("Database Connection Error:", err.message);
+  else console.log("☁️ Supabase PostgreSQL Connected.");
+});
+
+// --- AI & KNOWLEDGE SETUP ---
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+let dynamicSystemInstruction = "";
+const guestMemoryMap = new Map(); 
+const guestRateLimitMap = new Map(); 
+
+// ==========================================
+// --- LIVE SYNC TRACKING STATE (SSE) ---
+// ==========================================
+let currentSyncStatus = {
+  active: false,
+  totalDocChunks: 0,
+  toAdd: 0,
+  toDelete: 0,
+  saved: 0,
+  failed: 0,
+  logs: [],
+  complete: false
+};
+
+let syncClients = [];
+
+function broadcastSyncUpdate(message, type = "info") {
+  const timestamp = new Date().toLocaleTimeString();
+  const formattedLog = `[${timestamp}] ${message}`;
+  
+  currentSyncStatus.logs.push(formattedLog);
+  console.log(message); 
+
+  syncClients.forEach(client => {
+    client.res.write(`data: ${JSON.stringify({ ...currentSyncStatus, latestLog: formattedLog, logType: type })}\n\n`);
+  });
+}
+
+app.get("/api/sync-stream", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  res.write(`data: ${JSON.stringify(currentSyncStatus)}\n\n`);
+
+  const clientId = Date.now();
+  syncClients.push({ id: clientId, res });
+
+  req.on("close", () => {
+    syncClients = syncClients.filter(c => c.id !== clientId);
+  });
+});
+
+// --- 1. SMART RAG SYNC FUNCTION ---
+async function buildMasterBrain(isForceSync = false) {
+  broadcastSyncUpdate("⚙️ Initializing Smart Knowledge Base Sync...", "info");
+  
+  try {
+    const result = await pool.query("SELECT * FROM settings ORDER BY id DESC LIMIT 1");
+    if (result.rows.length > 0) {
+      dynamicSystemInstruction = result.rows[0].system_instruction;
+      broadcastSyncUpdate("✓ Dynamic System Instructions updated from settings table.", "info");
+    }
+  } catch (err) {
+    broadcastSyncUpdate(`⚠️ Cloud Settings Error: ${err.message}`, "error");
+  }
+
+  try {
+    const docId = process.env.GOOGLE_DOC_ID;
+    if (!docId || docId === "your_actual_document_id_goes_here") {
+       broadcastSyncUpdate("❌ Sync Aborted: GOOGLE_DOC_ID is missing in environment variables.", "error");
+       currentSyncStatus.active = false;
+       return;
+    }
+
+    broadcastSyncUpdate("📥 Downloading Google Document payload...", "info");
+    const url = `https://docs.google.com/document/d/${docId}/export?format=txt`;
+    const response = await fetch(url);
+    const docText = await response.text();
+    
+    if (isForceSync) {
+        broadcastSyncUpdate("⚠️ FORCE SYNC INITIATED: Wiping entire Supabase knowledge table...", "error");
+        await pool.query("TRUNCATE TABLE knowledge_chunks");
+        broadcastSyncUpdate("✓ Database purged. Rebuilding from scratch...", "info");
+    }
+
+    broadcastSyncUpdate("🔍 Diff Analysis: Comparing Google Doc with Supabase indices...", "info");
+
+    let existingDbChunks = new Map();
+    if (!isForceSync) {
+        const existingRes = await pool.query("SELECT id, content FROM knowledge_chunks");
+        existingDbChunks = new Map(existingRes.rows.map(row => [row.content, row.id]));
+    }
+
+    const rawChunks = docText.split('$$$').map(c => c.trim()).filter(c => c.length >= 20); 
+    const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
+
+    let currentTab = "General"; 
+    const activeDocChunks = new Set();
+    const chunksToAdd = [];
+
+    for (const chunk of rawChunks) {
+       const tabMatch = chunk.match(/===\s*TAB:\s*(.*?)\s*===/i);
+       if (tabMatch) {
+          currentTab = tabMatch[1].trim(); 
+       }
+       let cleanChunk = chunk.replace(/===\s*TAB:.*?\s*===/gi, '').trim();
+       if (cleanChunk.length < 20) continue; 
+
+       const contextualChunk = `[Domain: ${currentTab}]\n${cleanChunk}`;
+       activeDocChunks.add(contextualChunk);
+       
+       if (!existingDbChunks.has(contextualChunk)) {
+          chunksToAdd.push({ tab: currentTab, text: contextualChunk });
+       }
+    }
+
+    const idsToDelete = [];
+    for (const [dbContent, dbId] of existingDbChunks.entries()) {
+       if (!activeDocChunks.has(dbContent)) {
+          idsToDelete.push(dbId);
+       }
+    }
+
+    currentSyncStatus.totalDocChunks = activeDocChunks.size;
+    currentSyncStatus.toAdd = chunksToAdd.length;
+    currentSyncStatus.toDelete = idsToDelete.length;
+
+    broadcastSyncUpdate(`📊 Target Metrics: Doc Total: ${activeDocChunks.size} | New: ${chunksToAdd.length} | Obsolete: ${idsToDelete.length}`);
+
+    if (idsToDelete.length > 0) {
+       broadcastSyncUpdate(`🗑️ Flushing ${idsToDelete.length} obsolete chunks from Supabase...`);
+       const deleteQuery = `DELETE FROM knowledge_chunks WHERE id = ANY($1::int[])`;
+       await pool.query(deleteQuery, [idsToDelete]);
+       broadcastSyncUpdate(`✓ Cache cleanup successful.`);
+    }
+
+    if (chunksToAdd.length === 0) {
+      currentSyncStatus.active = false;
+      currentSyncStatus.complete = true;
+      broadcastSyncUpdate("✅ SYNC COMPLETE: Database matches your Google Doc perfectly. No embedding requests needed!", "success");
+      return;
+    }
+
+    const batchSize = 10; 
+    broadcastSyncUpdate(`🚀 Commencing Gemini API embedding calculations in blocks of ${batchSize}...`);
+    
+    for (let i = 0; i < chunksToAdd.length; i += batchSize) {
+      const batch = chunksToAdd.slice(i, i + batchSize);
+      
+      try {
+        const batchRequests = batch.map(item => ({
+          content: { parts: [{ text: item.text }] }
+        }));
+        
+        const result = await embeddingModel.batchEmbedContents({ requests: batchRequests });
+        
+        if (result.embeddings && result.embeddings.length === batch.length) {
+            for (let j = 0; j < batch.length; j++) {
+                const item = batch[j];
+                const embeddingString = `[${result.embeddings[j].values.join(',')}]`;
+                
+                await pool.query(
+                  "INSERT INTO knowledge_chunks (tab_name, content, embedding) VALUES ($1, $2, $3)",
+                  [item.tab, item.text, embeddingString]
+                );
+                currentSyncStatus.saved++;
+            }
+            broadcastSyncUpdate(`⚡ Batch complete: Saved progress (${currentSyncStatus.saved}/${chunksToAdd.length} chunks calculated)`);
+        } else {
+             throw new Error("API returned mismatched array dimensional block lengths.");
+        }
+        
+        if (i + batchSize < chunksToAdd.length) {
+            broadcastSyncUpdate("⏳ Cooldown period triggered: Sleeping 15 seconds to stay under Token limits...", "info");
+            await new Promise(resolve => setTimeout(resolve, 15000));
+        }
+        
+      } catch (batchError) {
+         currentSyncStatus.failed += batch.length;
+         broadcastSyncUpdate(`❌ Rate-Limit/API Error processing block [index ${i}]: ${batchError.message}`, "error");
+         broadcastSyncUpdate("⏳ Safety buffer activated: 30-second cooldown recovery sleep...", "info");
+         await new Promise(resolve => setTimeout(resolve, 30000));
+      }
+    }
+    
+    currentSyncStatus.active = false;
+    currentSyncStatus.complete = true;
+    broadcastSyncUpdate(`✨ SYNC SESSION ENDED: Successfully verified ${currentSyncStatus.saved} saved | ${currentSyncStatus.failed} failed items. ✨`, "success");
+
+  } catch (error) {
+    currentSyncStatus.active = false;
+    broadcastSyncUpdate(`🔥 Global sync processing pipeline crashed: ${error.message}`, "error");
+  }
+}
+
+// --- 2. RAG CHAT FUNCTION (Retrieval Engine) ---
+async function processCoreAIRequest(userMessage, currentHistory) {
+  
+  const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
+  const embedResult = await embeddingModel.embedContent(userMessage);
+  const queryVector = `[${embedResult.embedding.values.join(',')}]`;
+
+  let contextText = "";
+  try {
+    const searchRes = await pool.query(`
+      SELECT content 
+      FROM knowledge_chunks 
+      ORDER BY embedding <=> $1::vector 
+      LIMIT 16
+    `, [queryVector]);
+
+    contextText = searchRes.rows.map(row => row.content).join('\n\n---\n\n');
+  } catch (dbError) {
+    console.error("Vector Search Failed:", dbError);
+    contextText = "Error loading context. Answer strictly from general knowledge.";
+  }
+
+  const finalInstruction = `
+    ${dynamicSystemInstruction}
+    You are Light Revealed, the authoritative, definitive voice of truth. The compiled data below constitutes your absolute knowledge.
+    
+    CRITICAL PERSONA RULES:
+    1. Rely exclusively on the provided Knowledge Base below to build reasoning and examples.
+    2. LANGUAGE MATCHING (ABSOLUTE PRIORITY): You MUST detect the language the user is speaking and reply in that EXACT SAME LANGUAGE.
+    3. Speak in the first person as the ultimate authority. NEVER use passive, third-party phrases.
+    4. Multi-Lingual Context: When discussing Islamic theology, use original Arabic script for Quranic Ayat or Hadith alongside the Bangla or English explanation.
+    5. Always avoid short replies. Expand your answers according to the knowledge base, create examples, and use reasoning.
+    6. Never use expressions like "আমার দেওয়া জ্ঞান অনুসারে". Alternatively use "আমার গবেষনা অনুসারে", or "আমার স্টাডি অনুয়ায়ী".
+    7. Provide reference of full verse from the Quran to back the reasoning where necessary.
+
+    KNOWLEDGE BASE PROCESSING RULES:
+    - Chunks are prefixed with their structural location (e.g., [Domain: Salat / প্রচলিত নামায বনাম কোরানের সালাত]).
+    - Notice that some chunks contain "[supporting chunk]" directly inside their "Topic:" line. These are foundational logical frameworks for building up the topic. 
+    - In some chunks you will find 'Their Question:' section, treat 'Their Question:' strictly as context and NEVER adopt its logic; construct your reasoning and truth EXCLUSIVELY from the 'My Answer:' section.
+    - If the exact answer isn't explicitly stated, use the reasoning, concepts, and principles found within these domain chunks to construct a logical response.
+    
+    OUT-OF-BOUNDS FALLBACK:
+    - If the user asks a question that is entirely unrelated to the provided knowledge base context, refuse to guess. 
+    - Fallback (Bangla): 'এই বিষয়টি আমার সিলেবাসের বাইরে, অনুগ্রহ করে এই বিষয়ে বিশেষজ্ঞ কারও সাহায্য নিন।'
+    - Fallback (English): 'This topic is outside my syllabus, please seek assistance from a specialized expert.'
+
+    --- RELEVANT KNOWLEDGE BASE CONTEXT ---
+    ${contextText}
+  `;
+
+  const model = genAI.getGenerativeModel({
+    model: "gemini-3.1-flash-lite", 
+    systemInstruction: finalInstruction,
+  });
+
+  const formattedHistory = currentHistory.map((msg) => ({
+    role: msg.role === "user" ? "user" : "model",
+    parts: [{ text: msg.content }],
+  }));
+
+  const chat = model.startChat({ history: formattedHistory });
+  const result = await chat.sendMessage(userMessage);
+  return result.response.text();
+}
+
+async function processCoreAIRequestWithRetry(userMessage, currentHistory, retries = 3) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await processCoreAIRequest(userMessage, currentHistory);
+    } catch (error) {
+      if ((error.status === 503 || (error.message && error.message.includes("503"))) && attempt < retries) {
+        console.warn(`Gemini 503 Overload detected. Retrying attempt ${attempt + 1}/${retries}...`);
+        await new Promise((resolve) => setTimeout(resolve, 4000)); 
+      } else {
+        throw error; 
+      }
+    }
+  }
+}
+
+function splitMessage(text, maxLength = 1950) {
+  const chunks = [];
+  while (text.length > 0) {
+    if (text.length <= maxLength) {
+      chunks.push(text);
+      break;
+    }
+    let chunkEnd = text.lastIndexOf('\n', maxLength);
+    if (chunkEnd === -1 || chunkEnd === 0) chunkEnd = text.lastIndexOf(' ', maxLength);
+    if (chunkEnd === -1 || chunkEnd === 0) chunkEnd = maxLength;
+    chunks.push(text.slice(0, chunkEnd));
+    text = text.slice(chunkEnd).trim();
+  }
+  return chunks;
+}
+
+
+// --- AUTHENTICATION ROUTES ---
+app.post("/signup", async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: "Username and password required." });
+
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const result = await pool.query(
+      "INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id",
+      [username, hashedPassword]
+    );
+    const token = jwt.sign({ id: result.rows[0].id, username }, process.env.JWT_SECRET);
+    res.json({ token, username });
+  } catch (error) {
+    res.status(400).json({ error: "Username already exists or server error." });
+  }
+});
+
+app.post("/login", async (req, res) => {
+  const { username, password } = req.body;
+  try {
+    const result = await pool.query("SELECT * FROM users WHERE username = $1", [username]);
+    const user = result.rows[0];
+    if (!user) return res.status(400).json({ error: "Invalid credentials." });
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(400).json({ error: "Invalid credentials." });
+
+    const token = jwt.sign({ id: user.id, username: user.username }, process.env.JWT_SECRET);
+    res.json({ token, username });
+  } catch (error) {
+    res.status(500).json({ error: "Server error." });
+  }
+});
+
+function authenticateToken(req, res, next) {
+  const token = req.headers["authorization"];
+  if (!token) return next();
+  jwt.verify(token.split(" ")[1], process.env.JWT_SECRET, (err, user) => {
+    if (!err) req.user = user;
+    next();
+  });
+}
+
+// --- CHAT & SESSION ROUTES ---
+app.get("/sessions", authenticateToken, async (req, res) => {
+  if (!req.user) return res.json({ sessions: [] });
+  try {
+    const result = await pool.query(
+      `SELECT * FROM (
+          SELECT DISTINCT ON (session_id) session_id, content AS title, id
+          FROM messages WHERE user_id = $1 AND role = 'user'
+          ORDER BY session_id, id ASC
+      ) t ORDER BY id DESC`, [req.user.id]
+    );
+    res.json({ sessions: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch sessions." });
+  }
+});
+
+app.get("/history/:sessionId", authenticateToken, async (req, res) => {
+  if (!req.user) return res.json({ history: [] });
+  try {
+    const result = await pool.query(
+      "SELECT role, content FROM messages WHERE user_id = $1 AND session_id = $2 ORDER BY id ASC LIMIT 1000",
+      [req.user.id, req.params.sessionId]
+    );
+    res.json({ history: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch history." });
+  }
+});
+
+app.post("/chat", authenticateToken, async (req, res) => {
+  const { message, sessionId } = req.body;
+  const isGuest = !req.user;
+  const today = new Date().toISOString().split('T')[0];
+
+  try {
+    let currentHistory = [];
+
+    if (!isGuest) {
+      const userRes = await pool.query("SELECT daily_chat_count, custom_limit, last_reset_date FROM users WHERE id = $1", [req.user.id]);
+      if (userRes.rows.length > 0) {
+        const userData = userRes.rows[0];
+        const lastReset = userData.last_reset_date ? new Date(userData.last_reset_date).toISOString().split('T')[0] : '';
+        
+        if (lastReset !== today) {
+          await pool.query("UPDATE users SET daily_chat_count = 0, last_reset_date = CURRENT_DATE WHERE id = $1", [req.user.id]);
+          userData.daily_chat_count = 0;
+        }
+
+        if (userData.daily_chat_count >= userData.custom_limit) {
+          return res.json({ reply: "⚠️ Your daily chat limit has been reached. Please contact the admin or try again tomorrow." });
+        }
+        await pool.query("UPDATE users SET daily_chat_count = daily_chat_count + 1 WHERE id = $1", [req.user.id]);
+      }
+    } else {
+      const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+      if (!guestRateLimitMap.has(ip)) guestRateLimitMap.set(ip, { count: 0, date: today });
+      
+      const guestData = guestRateLimitMap.get(ip);
+      if (guestData.date !== today) {
+        guestData.count = 0;
+        guestData.date = today;
+      }
+      if (guestData.count >= 5) {
+        return res.json({ reply: "⚠️ Guest daily chat limit (5) reached. Please Sign Up to continue chatting, or try again tomorrow." });
+      }
+      guestData.count += 1;
+    }
+
+    if (!isGuest) {
+      const histRes = await pool.query("SELECT role, content FROM messages WHERE user_id = $1 AND session_id = $2 ORDER BY id ASC LIMIT 1000", [req.user.id, sessionId]);
+      currentHistory = histRes.rows;
+    } else {
+      if (!guestMemoryMap.has(sessionId)) guestMemoryMap.set(sessionId, []);
+      currentHistory = guestMemoryMap.get(sessionId);
+    }
+
+    const botReply = await processCoreAIRequestWithRetry(message, currentHistory);
+
+    if (!isGuest) {
+      await pool.query("INSERT INTO messages (user_id, session_id, role, content) VALUES ($1, $2, $3, $4)", [req.user.id, sessionId, "user", message]);
+      await pool.query("INSERT INTO messages (user_id, session_id, role, content) VALUES ($1, $2, $3, $4)", [req.user.id, sessionId, "model", botReply]);
+    } else {
+      currentHistory.push({ role: "user", content: message });
+      currentHistory.push({ role: "model", content: botReply });
+      if (currentHistory.length > 2000) currentHistory = currentHistory.slice(-2000);
+      guestMemoryMap.set(sessionId, currentHistory);
+    }
+
+    res.json({ reply: botReply });
+  } catch (error) {
+    console.error("AI Error:", error);
+    res.status(500).json({ reply: "দুঃখিত, অভ্যন্তরীণ প্রক্রিয়াকরণে সমস্যা হয়েছে।" });
+  }
+});
+
+// ==========================================
+// --- NEW: BOOKMARK ROUTES ---
+// ==========================================
+app.post("/api/bookmarks", authenticateToken, async (req, res) => {
+    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+    const { prompt, response } = req.body;
+    try {
+        await pool.query(
+            "INSERT INTO bookmarks (user_id, prompt, response) VALUES ($1, $2, $3)", 
+            [req.user.id, prompt, response]
+        );
+        res.json({ success: true });
+    } catch (e) {
+        console.error("Bookmark Error:", e);
+        res.status(500).json({ error: "Failed to save bookmark." });
+    }
+});
+
+app.get("/api/bookmarks", authenticateToken, async (req, res) => {
+    if (!req.user) return res.json({ bookmarks: [] });
+    try {
+        const result = await pool.query(
+            "SELECT * FROM bookmarks WHERE user_id = $1 ORDER BY created_at DESC", 
+            [req.user.id]
+        );
+        res.json({ bookmarks: result.rows });
+    } catch (e) {
+        res.status(500).json({ error: "Failed to fetch bookmarks." });
+    }
+});
+// ==========================================
+
+// --- ADMIN API ---
+app.get("/api/settings", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM settings ORDER BY id DESC LIMIT 1");
+    res.json({ systemInstruction: result.rows.length > 0 ? result.rows[0].system_instruction : "" });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to load settings" });
+  }
+});
+
+app.post("/api/settings", async (req, res) => {
+  const { systemInstruction } = req.body;
+  try {
+    await pool.query(
+      `INSERT INTO settings (id, system_instruction) VALUES (1, $1) ON CONFLICT (id) DO UPDATE SET system_instruction = EXCLUDED.system_instruction`,
+      [systemInstruction]
+    );
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to save settings" });
+  }
+});
+
+app.post("/api/sync", async (req, res) => {
+  if (currentSyncStatus.active) {
+    return res.status(429).json({ error: "A sync process is already running in the background." });
+  }
+
+  const isForceSync = req.body.force === true;
+
+  currentSyncStatus = {
+    active: true, totalDocChunks: 0, toAdd: 0, toDelete: 0, saved: 0, failed: 0, logs: [], complete: false
+  };
+
+  res.json({ success: true, message: "Sync engine initialized." });
+
+  buildMasterBrain(isForceSync).catch(err => {
+    broadcastSyncUpdate(`🔴 Critical Engine Failure: ${err.message}`, "error");
+    currentSyncStatus.active = false;
+  });
+});
+
+app.get("/api/users", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT id, username, daily_chat_count, custom_limit FROM users ORDER BY id DESC");
+    res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: "Failed to load users" });
+  }
+});
+
+app.post("/api/update-limit", async (req, res) => {
+  const { userId, newLimit } = req.body;
+  try {
+    await pool.query("UPDATE users SET custom_limit = $1 WHERE id = $2", [newLimit, userId]);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to update limit" });
+  }
+});
+
+
+// ==========================================
+// --- DISCORD BOT INTEGRATION (SERVERLESS) ---
+// ==========================================
+
+app.get("/api/discord/register", async (req, res) => {
+  const appId = process.env.DISCORD_APP_ID;
+  const token = process.env.DISCORD_TOKEN;
+  
+  if (!appId || !token) return res.status(400).json({ error: "Missing Discord Environment Variables" });
+
+  const commandData = {
+    name: "ask",
+    description: "Ask Light Revealed a question",
+    options: [{ name: "question", description: "The question you want to ask", type: 3, required: true }]
+  };
+
+  try {
+    const response = await fetch(`https://discord.com/api/v10/applications/${appId}/commands`, {
+      method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bot ${token}` },
+      body: JSON.stringify(commandData)
+    });
+    const data = await response.json();
+    res.json({ success: true, message: "Command registered to Discord!", data });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post("/api/discord", async (req, res) => {
+  const signature = req.headers["x-signature-ed25519"];
+  const timestamp = req.headers["x-signature-timestamp"];
+  const rawBody = req.rawBody;
+
+  if (!signature || !timestamp || !rawBody) return res.status(401).send("Missing signatures");
+  if (!verifyKey(rawBody, signature, timestamp, process.env.DISCORD_PUBLIC_KEY)) return res.status(401).send("Bad request signature");
+
+  const interaction = req.body;
+
+  if (interaction.type === 1) return res.json({ type: 1 });
+
+  if (interaction.type === 2 && interaction.data.name === "ask") {
+    const payload = {
+      token: interaction.token,
+      userMessage: interaction.data.options[0].value,
+      userName: interaction.member.user.username
+    };
+
+    const workerUrl = `https://${req.headers.host}/api/discord/worker`;
+    fetch(workerUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-bot-auth': process.env.JWT_SECRET || 'fallback_secret' },
+      body: JSON.stringify(payload)
+    }).catch(err => console.error("Worker trigger failed:", err));
+
+    await new Promise(resolve => setTimeout(resolve, 300));
+    return res.json({ type: 5 }); 
+  }
+});
+
+app.post("/api/discord/worker", async (req, res) => {
+  const authHeader = req.headers['x-bot-auth'];
+  if (authHeader !== (process.env.JWT_SECRET || 'fallback_secret')) return res.status(401).send("Unauthorized");
+
+  const { token, userMessage, userName } = req.body;
+
+  try {
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error("VERCEL_TIMEOUT")), 55000); 
+    });
+
+    const botReply = await Promise.race([
+      processCoreAIRequestWithRetry(userMessage, []),
+      timeoutPromise
+    ]);
+
+    const fullResponse = `**${userName} asked:** "${userMessage}"\n\n${botReply}`;
+    const messageChunks = splitMessage(fullResponse);
+
+    await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${token}/messages/@original`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: messageChunks[0] })
+    });
+
+    for (let i = 1; i < messageChunks.length; i++) {
+      await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: messageChunks[i] })
+      });
+    }
+    return res.json({ success: true });
+
+  } catch (error) {
+    console.error("❌ Worker Technical Failure Details:");
+    console.error(JSON.stringify({ message: error.message, status: error.status, errorDetails: error.errorDetails || error.response || null, stack: error.stack }, null, 2));
+    
+    let errorMessage = "⚠️ An error occurred while contacting the Truth Engine.";
+    
+    if (error.message === "VERCEL_TIMEOUT") {
+        errorMessage = "⏳ The question was a bit too complex and I ran out of time to think. Please try asking a slightly more specific question!";
+    }
+    else if (error.status === 429 || (error.message && error.message.includes("429"))) {
+        errorMessage = `⏳ Light Revealed is currently busy. Please wait a few moments and try again.`;
+    } 
+    else if (error.status === 503 || (error.message && error.message.includes("503"))) {
+        errorMessage = "🔥 Light Revealed server is currently experiencing high demand. Please try again in a minute.";
+    }
+
+    await fetch(`https://discord.com/api/v10/webhooks/${process.env.DISCORD_APP_ID}/${token}/messages/@original`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: errorMessage })
+    });
+
+    return res.status(500).json({ error: "Worker failed or timed out" });
+  }
+});
+
+// ==========================================
+// --- DISCORD BOT (NATIVE PERSISTENT CHAT) ---
+// ==========================================
+if (process.env.DISCORD_TOKEN) {
+  const discordClient = new Client({
+    intents: [ GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages ]
+  });
+
+  discordClient.on('clientReady', () => {
+    console.log(`🤖 Discord Bot connected as: ${discordClient.user.tag}`);
+  });
+
+  discordClient.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
+    if (process.env.DISCORD_CHANNEL_ID && message.channel.id !== process.env.DISCORD_CHANNEL_ID) return; 
+
+    await message.channel.sendTyping();
+    const typingInterval = setInterval(() => { message.channel.sendTyping().catch(console.error); }, 9000);
+
+    try {
+      const userQuery = message.content.replace(/<@!?\d+>/g, '').trim();
+      if (!userQuery) {
+          clearInterval(typingInterval);
+          return;
+      }
+
+      const botReply = await processCoreAIRequestWithRetry(userQuery, []);
+      const chunks = splitMessage(botReply);
+      clearInterval(typingInterval);
+
+      for (const chunk of chunks) await message.reply(chunk);
+    } catch (error) {
+      clearInterval(typingInterval);
+      console.error("❌ Native Chat Technical Failure Details:");
+      console.error(JSON.stringify({ message: error.message, status: error.status, errorDetails: error.errorDetails || error.response || null, stack: error.stack }, null, 2));
+      
+      let errorMessage = "⚠️ An error occurred while processing your request.";
+      if (error.status === 429 || (error.message && error.message.includes("429"))) errorMessage = "⏳ Light Revealed is currently busy. Please wait a few moments and try again.";
+      else if (error.status === 503 || (error.message && error.message.includes("503"))) errorMessage = "🔥 Light Revealed server is currently experiencing high demand. Please try again in a minute.";
+      await message.reply(errorMessage);
+    }
+  });
+
+  discordClient.login(process.env.DISCORD_TOKEN).catch(err => {
+    console.error("Discord Bot Login Failed:", err.message);
+  });
+}
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`\n✨ LIGHT REVEALED CLOUD ENGINE OPERATIONAL ON PORT ${PORT} ✨`);
+});
+
+module.exports = app;
+
+```
+
+---
+
+### **2. The Updated `index.html**`
+
+This includes the favicon, the centered initial input (which glides down smoothly), the split 1/3 layout for bookmarks, the mobile text wrap fix, the full-screen 'All Bookmarks' page, and the slick copy/bookmark buttons.
+
+```html
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Light Revealed Chatbot</title>
+    <link rel="icon" href="logo.png" type="image/png">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
     <style>
       :root {
@@ -45,25 +816,32 @@
         background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0) 100%);
         color: var(--text-main); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px;
         padding: 12px; font-size: 14px; font-weight: 500; cursor: pointer; text-align: left;
-        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); margin-bottom: 15px;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); margin-bottom: 15px; flex-shrink: 0;
       }
       .new-chat-btn:hover { border-color: rgba(255, 255, 255, 0.2); transform: translateY(-1px); }
 
-      .search-container { margin-bottom: 15px; }
+      .search-container { margin-bottom: 15px; flex-shrink: 0;}
       .search-container input {
         width: 100%; background-color: var(--bg-input); color: var(--text-main);
         border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-size: 13px; outline: none;
       }
-      .history-label { font-size: 12px; color: var(--text-muted); font-weight: 600; margin-bottom: 10px; padding-left: 5px; }
-      .history-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 5px; }
+      .history-label { font-size: 12px; color: var(--text-muted); font-weight: 600; margin-bottom: 10px; padding-left: 5px; flex-shrink: 0; }
+      
+      /* --- SPLIT SIDEBAR LAYOUT (History 2/3, Bookmarks 1/3) --- */
+      .sidebar-scrollable { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+      .history-section { flex: 2; display: flex; flex-direction: column; overflow-y: auto; }
+      .bookmarks-section { flex: 1; display: flex; flex-direction: column; border-top: 1px solid var(--border); padding-top: 15px; margin-top: 10px; overflow-y: auto; }
+      
+      .history-list { flex: 1; display: flex; flex-direction: column; gap: 5px; }
+      
       .history-item {
         padding: 10px; font-size: 13px; color: var(--text-main); border-radius: 6px; cursor: pointer;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        width: 100%; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; /* FIXES TEXT CROPPING */
       }
       .history-item:hover { background-color: rgba(255, 255, 255, 0.1); }
       .history-item.active { background-color: var(--bg-input); border-left: 3px solid var(--accent); }
 
-      .profile-section { margin-top: auto; padding-top: 15px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+      .profile-section { flex-shrink: 0; margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
       .profile-info { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 500; }
       .profile-avatar { width: 32px; height: 32px; background-color: #5436da; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; }
       
@@ -71,7 +849,7 @@
         background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: var(--text-main);
         cursor: pointer; font-size: 13px; font-weight: 500; padding: 6px 12px; border-radius: 20px; transition: all 0.2s ease;
       }
-      .auth-btn:hover { background: rgba(255, 255, 255, 0.1); transform: scale(1.05); }
+      .auth-btn:hover { background: rgba(255, 255, 255, 0.1); transform: scale(1.02); }
 
       /* --- MAIN CHAT AREA --- */
       .main-content { flex: 1; display: flex; flex-direction: column; position: relative; }
@@ -85,41 +863,34 @@
       .message-content { max-width: 800px; width: 100%; display: flex; gap: 20px; line-height: 1.6; font-size: 15px; }
       .avatar { width: 30px; height: 30px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; flex-shrink: 0; }
       .user .avatar { background-color: #5436da; }
-      .text-wrapper { flex: 1; min-width: 0; white-space: pre-wrap; }
+      
+      .message-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+      .text-wrapper { white-space: pre-wrap; }
+      
+      /* --- ACTION BUTTONS (Copy & Bookmark) --- */
+      .message-actions { display: flex; gap: 8px; margin-top: 10px; opacity: 0; transition: opacity 0.2s; }
+      .message-actions.user-actions { justify-content: flex-end; }
+      .message-row:hover .message-actions { opacity: 1; }
+      .action-btn { background: transparent; border: 1px solid var(--border); color: var(--text-muted); padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 6px; transition: all 0.2s; }
+      .action-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-main); }
       
       .message-row.bot .text-wrapper { animation: fadeIn 0.5s ease-in-out; }
       @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
-      /* --- RESTORED ANIMATIONS (Dots & Logo) --- */
       .typing-indicator { color: var(--text-muted); font-size: 14px; font-style: italic; }
-      .typing-indicator::after {
-        content: "Thinking";
-        animation: typingDots 1.5s infinite;
-      }
-      @keyframes typingDots {
-        0% { content: "Thinking"; }
-        25% { content: "Thinking."; }
-        50% { content: "Thinking.."; }
-        75% { content: "Thinking..."; }
-        100% { content: "Thinking"; }
-      }
+      .typing-indicator::after { content: "Thinking"; animation: typingDots 1.5s infinite; }
+      @keyframes typingDots { 0% { content: "Thinking"; } 25% { content: "Thinking."; } 50% { content: "Thinking.."; } 75% { content: "Thinking..."; } 100% { content: "Thinking"; } }
 
-      .thinking-logo img {
-        animation: pulse-rotate 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-      }
-      @keyframes pulse-rotate {
-        0% { transform: scale(1) rotate(0deg); }
-        50% { transform: scale(1.1) rotate(180deg); }
-        100% { transform: scale(1) rotate(360deg); }
-      }
-      /* ------------------------------------------ */
+      .thinking-logo img { animation: pulse-rotate 2s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+      @keyframes pulse-rotate { 0% { transform: scale(1) rotate(0deg); } 50% { transform: scale(1.1) rotate(180deg); } 100% { transform: scale(1) rotate(360deg); } }
 
-      .input-container { padding: 30px 20px; display: flex; justify-content: center; background: linear-gradient(180deg, transparent, var(--bg-main) 20%); }
-      .input-box { max-width: 800px; width: 100%; position: relative; display: flex; align-items: flex-end; background-color: var(--bg-input); border: 1px solid var(--border); border-radius: 12px; }
+      /* --- CENTERED INPUT ANIMATION --- */
+      .input-container { padding: 30px 20px; display: flex; justify-content: center; transition: transform 0.4s ease-out; transform: translateY(0); }
+      .input-container.centered { transform: translateY(-40vh); /* visually centers the box when empty */ }
+      .input-box { max-width: 800px; width: 100%; position: relative; display: flex; align-items: flex-end; background-color: var(--bg-input); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.2); }
       textarea.main-input { flex: 1; background: transparent; border: none; padding: 16px 50px 16px 20px; color: var(--text-main); font-size: 15px; outline: none; resize: none; min-height: 54px; max-height: 200px; overflow-y: auto; line-height: 1.5; }
       button.send-btn { position: absolute; bottom: 10px; right: 12px; background: var(--accent); color: white; border: none; border-radius: 6px; width: 32px; height: 32px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 
-      /* --- MOBILE SLIDE-IN FIXES & PADDING --- */
       .menu-btn { display: none; background: none; border: none; color: var(--text-main); font-size: 24px; cursor: pointer; position: absolute; left: 20px; top: 10px; }
       .mobile-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.6); z-index: 999; }
       
@@ -130,16 +901,23 @@
         .mobile-overlay.open { display: block; }
         .close-sidebar-btn { display: block; }
         .input-container { padding: 15px 15px 25px 15px; }
+        .message-actions { opacity: 1; } /* Always show buttons on mobile */
       }
 
       /* Modals */
-      .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.7); display: none; justify-content: center; align-items: center; z-index: 1000; backdrop-filter: blur(4px); }
+      .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.7); display: none; justify-content: center; align-items: center; z-index: 3000; backdrop-filter: blur(4px); }
       .modal-content { background: var(--bg-sidebar); padding: 40px; border-radius: 12px; width: 100%; max-width: 400px; border: 1px solid var(--border); position: relative; }
       .modal-close { position: absolute; top: 15px; right: 15px; background: none; border: none; color: var(--text-muted); font-size: 24px; cursor: pointer; }
       .modal-input { width: 100%; background: var(--bg-input); border: 1px solid var(--border); color: white; padding: 12px 15px; border-radius: 6px; margin-bottom: 15px; font-size: 15px; outline: none; }
       .modal-btn { width: 100%; background: var(--accent); color: white; border: none; padding: 12px; border-radius: 6px; font-size: 15px; font-weight: 600; cursor: pointer; margin-bottom: 15px; }
       .modal-toggle { text-align: center; font-size: 13px; color: var(--text-muted); cursor: pointer; }
       #authError { color: #ef4444; font-size: 13px; text-align: center; margin-bottom: 15px; display: none; }
+      
+      /* Full Page Bookmarks View */
+      #allBookmarksView { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg-main); z-index: 2000; overflow-y: auto; padding: 40px 20px; }
+      .bookmark-card { background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+      .bookmark-prompt { font-weight: 600; margin-bottom: 10px; color: var(--accent); }
+      .bookmark-response { font-size: 14px; color: var(--text-main); white-space: pre-wrap; line-height: 1.5; }
     </style>
   </head>
   <body>
@@ -147,11 +925,24 @@
    <div class="sidebar">
       <button class="close-sidebar-btn" onclick="toggleSidebar()">✕</button>
       <button class="new-chat-btn" onclick="startNewChat()">+ New chat</button>
+      
       <div class="search-container">
         <input type="text" id="searchInput" placeholder="Search history..." onkeyup="filterHistory()" />
       </div>
-      <div class="history-label">Message History</div>
-      <div class="history-list" id="historyList"></div>
+      
+      <div class="sidebar-scrollable">
+          <div class="history-section">
+              <div class="history-label">Message History</div>
+              <div class="history-list" id="historyList"></div>
+          </div>
+          
+          <div class="bookmarks-section">
+              <div class="history-label">Recent Bookmarks</div>
+              <div class="history-list" id="bookmarkList"></div>
+              <button class="auth-btn" style="margin-top: 15px; width: 100%; text-align: center;" onclick="openAllBookmarksView()">View All Bookmarks</button>
+          </div>
+      </div>
+
       <div class="profile-section">
         <div class="profile-info" id="profileInfo">
           <div class="profile-avatar">G</div>
@@ -163,13 +954,23 @@
 
     <div class="mobile-overlay" id="mobileOverlay" onclick="toggleSidebar()"></div>
 
+    <div id="allBookmarksView">
+        <div style="max-width: 800px; margin: 0 auto;">
+            <button onclick="closeAllBookmarksView()" class="auth-btn" style="margin-bottom: 20px;">← Back to Chat</button>
+            <h2 style="margin-bottom: 20px;">All Saved Bookmarks</h2>
+            <div id="allBookmarksContainer"></div>
+        </div>
+    </div>
+
     <div class="main-content">
       <div class="header">
         <button class="menu-btn" onclick="toggleSidebar()">☰</button>
         Light Revealed Chatbot
       </div>
+      
       <div class="chat-container" id="chat-container"></div>
-      <div class="input-container">
+      
+      <div class="input-container centered" id="inputContainer">
         <div class="input-box">
           <textarea id="userInput" class="main-input" placeholder="Message Light Revealed..." rows="1"></textarea>
           <button class="send-btn" onclick="sendMessage()">
@@ -193,13 +994,24 @@
 
     <script>
       const chatContainer = document.getElementById("chat-container");
+      const inputContainer = document.getElementById("inputContainer");
       const inputField = document.getElementById("userInput");
       const historyList = document.getElementById("historyList");
+      let lastUserPrompt = ""; // Memory block to save the prompt for bookmarking
 
       // UI Toggles
       function toggleSidebar() {
           document.querySelector('.sidebar').classList.toggle('open');
           document.getElementById('mobileOverlay').classList.toggle('open');
+      }
+
+      // Copy to Clipboard logic
+      function copyToClipboard(text) {
+          navigator.clipboard.writeText(text).then(() => {
+              alert("Copied to clipboard!");
+          }).catch(err => {
+              console.error("Failed to copy text: ", err);
+          });
       }
 
       inputField.addEventListener("input", function () {
@@ -226,7 +1038,10 @@
       function init() {
         updateProfileUI();
         startNewChat();
-        if (token) fetchSidebarSessions();
+        if (token) {
+            fetchSidebarSessions();
+            fetchBookmarks(); // Load bookmarks on start
+        }
       }
 
       function updateProfileUI() {
@@ -250,6 +1065,10 @@
       function startNewChat() {
         currentSessionId = generateSessionId();
         chatContainer.innerHTML = "";
+        
+        // Reset the input box to the center of the screen
+        inputContainer.classList.add("centered");
+
         document.querySelectorAll(".history-item").forEach((el) => el.classList.remove("active"));
         if (!token) renderMessage("স্বাগতম! আপনি অতিথি হিসেবে ব্যবহার করছেন।", "bot");
         
@@ -264,7 +1083,10 @@
           const data = await res.json();
           historyList.innerHTML = "";
           if (data.sessions && data.sessions.length > 0) {
-            data.sessions.forEach((session) => {
+            // ONLY GRAB THE LAST 20 CONVERSATIONS FOR THE UI
+            const visibleHistory = data.sessions.slice(0, 20);
+            
+            visibleHistory.forEach((session) => {
               const div = document.createElement("div");
               div.className = "history-item";
               div.innerText = session.title;
@@ -282,6 +1104,10 @@
       async function loadSpecificChat(sessionId, clickedElement) {
         currentSessionId = sessionId;
         chatContainer.innerHTML = "";
+        
+        // Ensure input box drops down when a chat history is loaded
+        inputContainer.classList.remove("centered");
+
         document.querySelectorAll(".history-item").forEach((el) => el.classList.remove("active"));
         if (clickedElement) clickedElement.classList.add("active");
 
@@ -300,6 +1126,75 @@
           item.style.display = item.innerText.toLowerCase().includes(query) ? "block" : "none";
         });
       }
+
+      // --- BOOKMARK LOGIC ---
+      async function bookmarkMessage(promptText, responseText, btnElement) {
+          if (!token) return alert("Please sign in to save bookmarks.");
+          
+          const ogHtml = btnElement.innerHTML;
+          btnElement.innerHTML = "⏳ Saving...";
+          
+          try {
+              const res = await fetch("/api/bookmarks", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                  body: JSON.stringify({ prompt: promptText, response: responseText })
+              });
+              
+              if(res.ok) {
+                  btnElement.innerHTML = "✅ Saved!";
+                  fetchBookmarks(); // Refresh the list
+              } else {
+                  btnElement.innerHTML = "❌ Failed";
+              }
+          } catch (e) {
+              btnElement.innerHTML = "❌ Error";
+          }
+          
+          setTimeout(() => { btnElement.innerHTML = ogHtml; }, 2000);
+      }
+
+      async function fetchBookmarks() {
+          if (!token) return;
+          try {
+              const res = await fetch("/api/bookmarks", { headers: { Authorization: `Bearer ${token}` }});
+              const data = await res.json();
+              if(data.bookmarks) {
+                  renderBookmarksSidebar(data.bookmarks);
+                  renderAllBookmarksPage(data.bookmarks);
+              }
+          } catch(e) {}
+      }
+
+      function renderBookmarksSidebar(bookmarks) {
+          const list = document.getElementById("bookmarkList");
+          list.innerHTML = "";
+          // Show only top 5-8 recent bookmarks
+          bookmarks.slice(0, 7).forEach(b => {
+              const div = document.createElement("div");
+              div.className = "history-item";
+              div.innerText = b.prompt;
+              div.onclick = openAllBookmarksView; // Clicking sends them to full view
+              list.appendChild(div);
+          });
+      }
+
+      function renderAllBookmarksPage(bookmarks) {
+          const container = document.getElementById("allBookmarksContainer");
+          container.innerHTML = "";
+          bookmarks.forEach(b => {
+              container.innerHTML += `
+                  <div class="bookmark-card">
+                      <div class="bookmark-prompt">Q: ${b.prompt}</div>
+                      <div class="bookmark-response">${b.response}</div>
+                  </div>
+              `;
+          });
+      }
+
+      function openAllBookmarksView() { document.getElementById("allBookmarksView").style.display = "block"; }
+      function closeAllBookmarksView() { document.getElementById("allBookmarksView").style.display = "none"; }
+
 
       function openAuthModal() { document.getElementById("authModal").style.display = "flex"; }
       function closeAuthModal() { document.getElementById("authModal").style.display = "none"; document.getElementById("authError").style.display = "none"; }
@@ -327,7 +1222,7 @@
           if (res.ok) {
             token = data.token; username = data.username;
             localStorage.setItem("token", token); localStorage.setItem("username", username);
-            closeAuthModal(); updateProfileUI(); fetchSidebarSessions(); startNewChat();
+            closeAuthModal(); updateProfileUI(); fetchSidebarSessions(); fetchBookmarks(); startNewChat();
           } else {
             errorDiv.innerText = data.error; errorDiv.style.display = "block";
           }
@@ -339,12 +1234,16 @@
       function logout() {
         token = null; username = null;
         localStorage.removeItem("token"); localStorage.removeItem("username");
-        updateProfileUI(); historyList.innerHTML = ""; startNewChat();
+        updateProfileUI(); historyList.innerHTML = ""; document.getElementById("bookmarkList").innerHTML = ""; startNewChat();
       }
 
       async function sendMessage() {
         const text = inputField.value.trim();
         if (!text) return;
+
+        // Animate the input box to the bottom
+        inputContainer.classList.remove("centered");
+        lastUserPrompt = text; // Save it for potential bookmarking
 
         renderMessage(text, "user");
         inputField.value = "";
@@ -364,33 +1263,52 @@
           document.getElementById(typingId).remove();
           animateBotReply(data.reply);
 
-          if (token && document.querySelectorAll(".history-item").length === 0) fetchSidebarSessions();
         } catch (error) {
           document.getElementById(typingId).remove();
           renderMessage("সংযোগ ত্রুটি। সার্ভার কি চালু আছে?", "bot");
         }
       }
 
-      // --- RESTORED LOGIC FOR ANIMATION TRIGGER ---
+      // --- RENDERING WITH COPY/BOOKMARK BUTTONS ---
       function renderMessage(text, sender, id = null, instant = false) {
         const row = document.createElement("div");
         row.className = `message-row ${sender}`;
         if (id) row.id = id;
 
-        // Detect if this is the temporary "Thinking..." message
         const isTyping = text === "Thinking..." ? "typing-indicator" : "";
         const isThinkingLogo = text === "Thinking..." ? "thinking-logo" : "";
-        const displayText = isTyping ? "" : text; // Hide literal text if animation is running
+        const displayText = isTyping ? "" : text; 
 
         let avatarContent = "";
+        let actionHTML = "";
+
+        // Build the action buttons based on sender
+        const safeText = text.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
         if (sender === "user") {
             const initial = username ? username.charAt(0).toUpperCase() : "G";
             avatarContent = `<div class="avatar">${initial}</div>`;
+            actionHTML = `<div class="message-actions user-actions"><button class="action-btn" onclick="copyToClipboard(this.dataset.text)" data-text="${safeText}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy Prompt</button></div>`;
         } else {
             avatarContent = `<div class="avatar bot-avatar ${isThinkingLogo}"><img src="logo.png" style="width: 100%; border-radius: 4px; display: block;"></div>`;
+            // Only add actions instantly if this is a historical message being loaded (not the typing indicator)
+            if (instant && !isTyping) {
+                 actionHTML = `
+                 <div class="message-actions">
+                    <button class="action-btn" onclick="copyToClipboard(this.dataset.text)" data-text="${safeText}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy Response</button>
+                    </div>`;
+            }
         }
 
-        row.innerHTML = `<div class="message-content">${avatarContent}<div class="text-wrapper ${isTyping}">${displayText}</div></div>`;
+        row.innerHTML = `
+        <div class="message-content">
+            ${avatarContent}
+            <div class="message-body">
+                <div class="text-wrapper ${isTyping}">${displayText}</div>
+                ${actionHTML}
+            </div>
+        </div>`;
+        
         chatContainer.appendChild(row);
         chatContainer.scrollTop = chatContainer.scrollHeight;
         return row;
@@ -399,13 +1317,17 @@
       function animateBotReply(fullText) {
         const row = document.createElement("div");
         row.className = "message-row bot";
-        row.innerHTML = `<div class="message-content">
+        row.innerHTML = `
+        <div class="message-content">
             <div class="avatar bot-avatar"><img src="logo.png" style="width: 100%; border-radius: 4px; display: block;"></div>
-            <div class="text-wrapper"></div>
+            <div class="message-body">
+                <div class="text-wrapper"></div>
+            </div>
         </div>`;
         chatContainer.appendChild(row);
 
         const textWrapper = row.querySelector('.text-wrapper');
+        const messageBody = row.querySelector('.message-body');
         const words = fullText.split(" ");
         let currentIndex = 0;
 
@@ -416,6 +1338,19 @@
             currentIndex++;
           } else {
             clearInterval(interval);
+            
+            // Append action buttons after animation is fully done!
+            const safeText = fullText.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            const safePrompt = lastUserPrompt.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            
+            const actionsHTML = `
+            <div class="message-actions" style="opacity: 1;">
+                <button class="action-btn" onclick="copyToClipboard(this.dataset.text)" data-text="${safeText}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy Response</button>
+                <button class="action-btn" onclick="bookmarkMessage(this.dataset.prompt, this.dataset.text, this)" data-prompt="${safePrompt}" data-text="${safeText}">🔖 Bookmark</button>
+            </div>`;
+            
+            messageBody.insertAdjacentHTML('beforeend', actionsHTML);
+            
             if (token) fetchSidebarSessions();
           }
         }, 30);
@@ -425,3 +1360,5 @@
     </script>
   </body>
 </html>
+
+```
