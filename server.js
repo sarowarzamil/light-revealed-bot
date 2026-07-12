@@ -494,7 +494,14 @@ app.post("/chat", authenticateToken, async (req, res) => {
     }
 
     if (!isGuest) {
-      const histRes = await pool.query("SELECT role, content FROM messages WHERE user_id = $1 AND session_id = $2 ORDER BY id ASC LIMIT 1000", [req.user.id, sessionId]);
+      // SMART MEMORY: Grabs only the LAST 6 messages to drastically save free DB usage!
+      const histRes = await pool.query(`
+        SELECT role, content FROM (
+          SELECT id, role, content FROM messages 
+          WHERE user_id = $1 AND session_id = $2 
+          ORDER BY id DESC LIMIT 6
+        ) subquery ORDER BY id ASC
+      `, [req.user.id, sessionId]);
       currentHistory = histRes.rows;
     } else {
       if (!guestMemoryMap.has(sessionId)) guestMemoryMap.set(sessionId, []);
@@ -504,12 +511,24 @@ app.post("/chat", authenticateToken, async (req, res) => {
     const botReply = await processCoreAIRequestWithRetry(message, currentHistory);
 
     if (!isGuest) {
+      // 1. Save the new messages
       await pool.query("INSERT INTO messages (user_id, session_id, role, content) VALUES ($1, $2, $3, $4)", [req.user.id, sessionId, "user", message]);
       await pool.query("INSERT INTO messages (user_id, session_id, role, content) VALUES ($1, $2, $3, $4)", [req.user.id, sessionId, "model", botReply]);
+      
+      // 2. Rolling Cleanup: Keep only the newest 1000 rows (500 interactions) per user
+      await pool.query(`
+        DELETE FROM messages 
+        WHERE id IN (
+          SELECT id FROM messages 
+          WHERE user_id = $1 
+          ORDER BY id DESC 
+          OFFSET 1000
+        )
+      `, [req.user.id]);
     } else {
       currentHistory.push({ role: "user", content: message });
       currentHistory.push({ role: "model", content: botReply });
-      if (currentHistory.length > 2000) currentHistory = currentHistory.slice(-2000);
+      if (currentHistory.length > 6) currentHistory = currentHistory.slice(-6); // Keeps guest memory lightweight too
       guestMemoryMap.set(sessionId, currentHistory);
     }
 
@@ -543,37 +562,29 @@ app.post("/api/settings", async (req, res) => {
   }
 });
 
-// Admin Sync Button Endpoint - NOW SUPPORTS FORCE SYNC
 app.post("/api/sync", async (req, res) => {
   if (currentSyncStatus.active) {
     return res.status(429).json({ error: "A sync process is already running in the background." });
   }
-
   const isForceSync = req.body.force === true;
-
-  currentSyncStatus = {
-    active: true,
-    totalDocChunks: 0,
-    toAdd: 0,
-    toDelete: 0,
-    saved: 0,
-    failed: 0,
-    logs: [],
-    complete: false
-  };
-
+  currentSyncStatus = { active: true, totalDocChunks: 0, toAdd: 0, toDelete: 0, saved: 0, failed: 0, logs: [], complete: false };
   res.json({ success: true, message: "Sync engine initialized." });
-
-  // Fire and forget, runs in the background while SSE handles UI updates
   buildMasterBrain(isForceSync).catch(err => {
     broadcastSyncUpdate(`🔴 Critical Engine Failure: ${err.message}`, "error");
     currentSyncStatus.active = false;
   });
 });
 
+// NEW: Advanced User Fetching (Includes CC Total and Last Active)
 app.get("/api/users", async (req, res) => {
   try {
-    const result = await pool.query("SELECT id, username, daily_chat_count, custom_limit FROM users ORDER BY id DESC");
+    const result = await pool.query(`
+      SELECT 
+        u.id, u.username, u.daily_chat_count, u.custom_limit,
+        (SELECT COUNT(*) FROM messages m WHERE m.user_id = u.id AND m.role = 'user') as cc_total,
+        (SELECT MAX(created_at) FROM messages m WHERE m.user_id = u.id) as last_active
+      FROM users u ORDER BY u.id DESC
+    `);
     res.json(result.rows);
   } catch (e) {
     res.status(500).json({ error: "Failed to load users" });
@@ -590,6 +601,50 @@ app.post("/api/update-limit", async (req, res) => {
   }
 });
 
+// NEW: Database Dashboard Stats
+app.get("/api/admin/stats", async (req, res) => {
+  try {
+    const usersCount = await pool.query("SELECT COUNT(*) FROM users");
+    const chunksCount = await pool.query("SELECT COUNT(*) FROM knowledge_chunks");
+    const msgsCount = await pool.query("SELECT COUNT(*) FROM messages");
+    res.json({
+        users: parseInt(usersCount.rows[0].count),
+        chunks: parseInt(chunksCount.rows[0].count),
+        messages: parseInt(msgsCount.rows[0].count)
+    });
+  } catch (e) { res.status(500).json({ error: "Stats error" }); }
+});
+
+// NEW: Bulk Delete Users
+app.post("/api/admin/users/delete", async (req, res) => {
+  const { userIds } = req.body;
+  try {
+    await pool.query("DELETE FROM users WHERE id = ANY($1::int[])", [userIds]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: "Delete failed" }); }
+});
+
+// NEW: Bulk Reset Limits
+app.post("/api/admin/users/reset", async (req, res) => {
+  const { userIds } = req.body;
+  try {
+    await pool.query("UPDATE users SET daily_chat_count = 0 WHERE id = ANY($1::int[])", [userIds]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: "Reset failed" }); }
+});
+
+// NEW: Bulk Download Chats
+app.post("/api/admin/users/download", async (req, res) => {
+  const { userIds } = req.body;
+  try {
+    const result = await pool.query(`
+      SELECT u.username, m.role, m.content, m.created_at 
+      FROM messages m JOIN users u ON m.user_id = u.id 
+      WHERE m.user_id = ANY($1::int[]) ORDER BY m.user_id, m.id ASC
+    `, [userIds]);
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: "Download failed" }); }
+});
 
 // ==========================================
 // --- DISCORD BOT INTEGRATION (SERVERLESS) ---
