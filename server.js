@@ -575,7 +575,6 @@ app.post("/api/sync", async (req, res) => {
   });
 });
 
-// NEW: Advanced User Fetching (Includes CC Total and Last Active)
 app.get("/api/users", async (req, res) => {
   try {
     const result = await pool.query(`
@@ -601,21 +600,36 @@ app.post("/api/update-limit", async (req, res) => {
   }
 });
 
-// NEW: Database Dashboard Stats
+// NEW: Global User Limit
+app.post("/api/admin/users/limit-all", async (req, res) => {
+  const { newLimit } = req.body;
+  try {
+    await pool.query("UPDATE users SET custom_limit = $1", [newLimit]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: "Update failed" }); }
+});
+
+// NEW: Database Dashboard Stats (Now reads raw DB Byte Size!)
 app.get("/api/admin/stats", async (req, res) => {
   try {
     const usersCount = await pool.query("SELECT COUNT(*) FROM users");
     const chunksCount = await pool.query("SELECT COUNT(*) FROM knowledge_chunks");
     const msgsCount = await pool.query("SELECT COUNT(*) FROM messages");
+    
+    // Fetch actual PostgreSQL database size
+    const dbSizeRes = await pool.query("SELECT pg_database_size(current_database()) as bytes");
+    const bytes = parseInt(dbSizeRes.rows[0].bytes);
+    const mbSize = (bytes / (1024 * 1024)).toFixed(2);
+
     res.json({
         users: parseInt(usersCount.rows[0].count),
         chunks: parseInt(chunksCount.rows[0].count),
-        messages: parseInt(msgsCount.rows[0].count)
+        messages: parseInt(msgsCount.rows[0].count),
+        dbSizeMB: parseFloat(mbSize)
     });
   } catch (e) { res.status(500).json({ error: "Stats error" }); }
 });
 
-// NEW: Bulk Delete Users
 app.post("/api/admin/users/delete", async (req, res) => {
   const { userIds } = req.body;
   try {
@@ -624,7 +638,6 @@ app.post("/api/admin/users/delete", async (req, res) => {
   } catch (e) { res.status(500).json({ error: "Delete failed" }); }
 });
 
-// NEW: Bulk Reset Limits
 app.post("/api/admin/users/reset", async (req, res) => {
   const { userIds } = req.body;
   try {
@@ -633,7 +646,6 @@ app.post("/api/admin/users/reset", async (req, res) => {
   } catch (e) { res.status(500).json({ error: "Reset failed" }); }
 });
 
-// NEW: Bulk Download Chats
 app.post("/api/admin/users/download", async (req, res) => {
   const { userIds } = req.body;
   try {
