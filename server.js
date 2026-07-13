@@ -384,32 +384,45 @@ app.post("/login", async (req, res) => {
 
 app.post("/request-reset", async (req, res) => {
   const { email } = req.body;
+  console.log("DEBUG: Reset request received for:", email); // Log 1
+
   try {
     const result = await pool.query("SELECT id, username FROM users WHERE email = $1", [email.toLowerCase()]);
-    if (result.rows.length === 0) return res.status(400).json({ error: "Email not found." });
+    if (result.rows.length === 0) {
+        console.log("DEBUG: Email not found in DB"); // Log 2
+        return res.status(400).json({ error: "Email not found." });
+    }
 
     const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
     await pool.query("UPDATE users SET reset_code = $1 WHERE email = $2", [resetCode, email.toLowerCase()]);
 
-    // 1. Send the response to the browser IMMEDIATELY
     res.json({ success: true, message: "Code sent to your email!" });
 
-    // 2. Fire and forget the email via Resend API
-    (async () => {
+    // BACKGROUND TASK
+    setImmediate(async () => {
         try {
-            await resend.emails.send({
-              from: 'onboarding@resend.dev', // Use a verified domain if you have one
+            console.log("DEBUG: Attempting to send email via Resend..."); // Log 3
+            // Check if key is loaded
+            if (!process.env.RESEND_API_KEY) {
+                console.error("DEBUG CRITICAL: RESEND_API_KEY is missing on server!");
+                return;
+            }
+            
+            const data = await resend.emails.send({
+              from: 'onboarding@resend.dev', 
               to: email,
               subject: 'Password Reset Code',
-              html: `<p>Hello ${result.rows[0].username},</p><p>Your 6-digit code is: <strong>${resetCode}</strong></p>`
+              html: `<p>Your 6-digit code is: <strong>${resetCode}</strong></p>`
             });
+            console.log("DEBUG: Resend API Response:", data); // Log 4
         } catch (err) {
-            console.error("Resend API failed:", err);
+            console.error("DEBUG CRITICAL: Resend API crashed:", err); // Log 5 (The real reason)
         }
-    })();
+    });
 
   } catch (error) {
-    res.status(500).json({ error: "System failed to process request." });
+    console.error("DEBUG CRITICAL: Database/System error:", error); // Log 6
+    res.status(500).json({ error: "Failed to process reset request." });
   }
 });
 
