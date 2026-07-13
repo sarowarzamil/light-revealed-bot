@@ -8,18 +8,8 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const { verifyKey } = require("discord-interactions"); 
 const { Client, GatewayIntentBits } = require("discord.js");
-const nodemailer = require("nodemailer");
-
-// Initialize Resend with your API Key
-const transporter = nodemailer.createTransport({
-  host: 'smtp.resend.com',
-  secure: true,
-  port: 465,
-  auth: {
-    user: 'resend', // This is always 'resend'
-    pass: process.env.RESEND_API_KEY // Put your API Key in your Render env variables
-  }
-});
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
 const app = express();
 app.use(cors());
 
@@ -398,22 +388,28 @@ app.post("/request-reset", async (req, res) => {
     const result = await pool.query("SELECT id, username FROM users WHERE email = $1", [email.toLowerCase()]);
     if (result.rows.length === 0) return res.status(400).json({ error: "Email not found." });
 
-    // Generate a 6-digit random code
     const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
     await pool.query("UPDATE users SET reset_code = $1 WHERE email = $2", [resetCode, email.toLowerCase()]);
 
-    // Send the email
-    await transporter.sendMail({
-      from: `"Light Revealed" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: "Password Reset Code",
-      text: `Hello ${result.rows[0].username},\n\nYour 6-digit password reset code is: ${resetCode}\n\nIf you did not request this, please ignore this email.`
-    });
-
+    // 1. Send the response to the browser IMMEDIATELY
     res.json({ success: true, message: "Code sent to your email!" });
+
+    // 2. Fire and forget the email via Resend API
+    (async () => {
+        try {
+            await resend.emails.send({
+              from: 'onboarding@resend.dev', // Use a verified domain if you have one
+              to: email,
+              subject: 'Password Reset Code',
+              html: `<p>Hello ${result.rows[0].username},</p><p>Your 6-digit code is: <strong>${resetCode}</strong></p>`
+            });
+        } catch (err) {
+            console.error("Resend API failed:", err);
+        }
+    })();
+
   } catch (error) {
-    console.error("EMAIL ERROR:", error); // This will print the exact reason to your Render Logs!
-    res.status(500).json({ error: "Failed to send email." });
+    res.status(500).json({ error: "System failed to process request." });
   }
 });
 
