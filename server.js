@@ -394,34 +394,35 @@ app.post("/login", async (req, res) => {
 
 app.post("/request-reset", async (req, res) => {
   const { email } = req.body;
+  console.log("DEBUG: Starting reset process for:", email);
+
   try {
     const result = await pool.query("SELECT id, username FROM users WHERE email = $1", [email.toLowerCase()]);
-    if (result.rows.length === 0) return res.status(400).json({ error: "Email not found." });
+    if (result.rows.length === 0) {
+        console.log("DEBUG: Email not found.");
+        return res.status(400).json({ error: "Email not found." });
+    }
 
     const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
     await pool.query("UPDATE users SET reset_code = $1 WHERE email = $2", [resetCode, email.toLowerCase()]);
 
-    // --- FIX: Respond to browser BEFORE sending email ---
-    res.json({ success: true, message: "Code sent!" });
-
-    // --- FIRE AND FORGET: Email sends in background ---
-    setImmediate(async () => {
-        try {
-            await transporter.sendMail({
-                from: `"Light Revealed" <${process.env.EMAIL_USER}>`,
-                to: email,
-                subject: "Password Reset Code",
-                text: `Hello ${result.rows[0].username},\n\nYour 6-digit password reset code is: ${resetCode}`
-            });
-            console.log("Email sent successfully!");
-        } catch (err) {
-            console.error("Nodemailer Background Error:", err);
-        }
+    // Force the server to show us what it's doing
+    console.log("DEBUG: Attempting to send email via Nodemailer...");
+    
+    await transporter.sendMail({
+        from: `"Light Revealed" <${process.env.EMAIL_USER}>`,
+        to: email,
+        subject: "Password Reset Code",
+        text: `Hello ${result.rows[0].username},\n\nYour 6-digit password reset code is: ${resetCode}`
     });
 
+    console.log("DEBUG: Email function completed successfully!");
+    res.json({ success: true, message: "Code sent!" });
+
   } catch (error) {
-    console.error("Reset Error:", error);
-    res.status(500).json({ error: "Failed to process." });
+    // This is the most important part!
+    console.error("DEBUG: FAILED at:", error); 
+    res.status(500).json({ error: "Failed to process: " + error.message });
   }
 });
 
