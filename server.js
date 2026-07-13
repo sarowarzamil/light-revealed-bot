@@ -405,6 +405,7 @@ app.post("/request-reset", async (req, res) => {
 
     res.json({ success: true, message: "Code sent to your email!" });
   } catch (error) {
+    console.error("EMAIL ERROR:", error); // This will print the exact reason to your Render Logs!
     res.status(500).json({ error: "Failed to send email." });
   }
 });
