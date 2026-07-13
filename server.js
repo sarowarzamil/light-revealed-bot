@@ -8,8 +8,18 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const { verifyKey } = require("discord-interactions"); 
 const { Client, GatewayIntentBits } = require("discord.js");
-const { Resend } = require('resend');
-const resend = new Resend(process.env.RESEND_API_KEY);
+const nodemailer = require("nodemailer");
+
+// Initialize Gmail Transporter
+const transporter = nodemailer.createTransport({
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true, // Use SSL
+  auth: {
+    user: process.env.EMAIL_USER, // Your Gmail
+    pass: process.env.EMAIL_PASS  // Your 16-char App Password (no spaces)
+  }
+});
 const app = express();
 app.use(cors());
 
@@ -384,45 +394,34 @@ app.post("/login", async (req, res) => {
 
 app.post("/request-reset", async (req, res) => {
   const { email } = req.body;
-  console.log("DEBUG: Reset request received for:", email); // Log 1
-
   try {
     const result = await pool.query("SELECT id, username FROM users WHERE email = $1", [email.toLowerCase()]);
-    if (result.rows.length === 0) {
-        console.log("DEBUG: Email not found in DB"); // Log 2
-        return res.status(400).json({ error: "Email not found." });
-    }
+    if (result.rows.length === 0) return res.status(400).json({ error: "Email not found." });
 
     const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
     await pool.query("UPDATE users SET reset_code = $1 WHERE email = $2", [resetCode, email.toLowerCase()]);
 
-    res.json({ success: true, message: "Code sent to your email!" });
+    // --- FIX: Respond to browser BEFORE sending email ---
+    res.json({ success: true, message: "Code sent!" });
 
-    // BACKGROUND TASK
+    // --- FIRE AND FORGET: Email sends in background ---
     setImmediate(async () => {
         try {
-            console.log("DEBUG: Attempting to send email via Resend..."); // Log 3
-            // Check if key is loaded
-            if (!process.env.RESEND_API_KEY) {
-                console.error("DEBUG CRITICAL: RESEND_API_KEY is missing on server!");
-                return;
-            }
-            
-            const data = await resend.emails.send({
-              from: 'onboarding@resend.dev', 
-              to: email,
-              subject: 'Password Reset Code',
-              html: `<p>Your 6-digit code is: <strong>${resetCode}</strong></p>`
+            await transporter.sendMail({
+                from: `"Light Revealed" <${process.env.EMAIL_USER}>`,
+                to: email,
+                subject: "Password Reset Code",
+                text: `Hello ${result.rows[0].username},\n\nYour 6-digit password reset code is: ${resetCode}`
             });
-            console.log("DEBUG: Resend API Response:", data); // Log 4
+            console.log("Email sent successfully!");
         } catch (err) {
-            console.error("DEBUG CRITICAL: Resend API crashed:", err); // Log 5 (The real reason)
+            console.error("Nodemailer Background Error:", err);
         }
     });
 
   } catch (error) {
-    console.error("DEBUG CRITICAL: Database/System error:", error); // Log 6
-    res.status(500).json({ error: "Failed to process reset request." });
+    console.error("Reset Error:", error);
+    res.status(500).json({ error: "Failed to process." });
   }
 });
 
