@@ -10,9 +10,11 @@ const { verifyKey } = require("discord-interactions");
 const { Client, GatewayIntentBits } = require("discord.js");
 const nodemailer = require("nodemailer");
 
-// Set up the free Gmail sender
+// Set up the robust Gmail sender
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true, // Requires SSL encryption
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
