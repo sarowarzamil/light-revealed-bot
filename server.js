@@ -8,6 +8,16 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const { verifyKey } = require("discord-interactions"); 
 const { Client, GatewayIntentBits } = require("discord.js");
+const nodemailer = require("nodemailer");
+
+// Set up the free Gmail sender
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+});
 
 const app = express();
 app.use(cors());
@@ -340,36 +350,76 @@ function splitMessage(text, maxLength = 1950) {
 
 // --- AUTHENTICATION ROUTES ---
 app.post("/signup", async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) return res.status(400).json({ error: "Username and password required." });
+  const { username, email, password } = req.body;
+  if (!username || !email || !password) return res.status(400).json({ error: "Username, email, and password required." });
 
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
     const result = await pool.query(
-      "INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id",
-      [username, hashedPassword]
+      "INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id",
+      [username, email.toLowerCase(), hashedPassword]
     );
     const token = jwt.sign({ id: result.rows[0].id, username }, process.env.JWT_SECRET);
     res.json({ token, username });
   } catch (error) {
-    res.status(400).json({ error: "Username already exists or server error." });
+    res.status(400).json({ error: "Username or Email already exists." });
   }
 });
 
 app.post("/login", async (req, res) => {
-  const { username, password } = req.body;
+  const { email, password } = req.body; // Now logs in with Email!
   try {
-    const result = await pool.query("SELECT * FROM users WHERE username = $1", [username]);
+    const result = await pool.query("SELECT * FROM users WHERE email = $1", [email.toLowerCase()]);
     const user = result.rows[0];
-    if (!user) return res.status(400).json({ error: "Invalid credentials." });
+    if (!user) return res.status(400).json({ error: "Account not found." });
 
     const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.status(400).json({ error: "Invalid credentials." });
+    if (!match) return res.status(400).json({ error: "Invalid password." });
 
     const token = jwt.sign({ id: user.id, username: user.username }, process.env.JWT_SECRET);
-    res.json({ token, username });
+    res.json({ token, username: user.username });
   } catch (error) {
     res.status(500).json({ error: "Server error." });
+  }
+});
+
+app.post("/request-reset", async (req, res) => {
+  const { email } = req.body;
+  try {
+    const result = await pool.query("SELECT id, username FROM users WHERE email = $1", [email.toLowerCase()]);
+    if (result.rows.length === 0) return res.status(400).json({ error: "Email not found." });
+
+    // Generate a 6-digit random code
+    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+    await pool.query("UPDATE users SET reset_code = $1 WHERE email = $2", [resetCode, email.toLowerCase()]);
+
+    // Send the email
+    await transporter.sendMail({
+      from: `"Light Revealed" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: "Password Reset Code",
+      text: `Hello ${result.rows[0].username},\n\nYour 6-digit password reset code is: ${resetCode}\n\nIf you did not request this, please ignore this email.`
+    });
+
+    res.json({ success: true, message: "Code sent to your email!" });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to send email." });
+  }
+});
+
+app.post("/reset-password", async (req, res) => {
+  const { email, code, newPassword } = req.body;
+  try {
+    const result = await pool.query("SELECT id FROM users WHERE email = $1 AND reset_code = $2", [email.toLowerCase(), code]);
+    if (result.rows.length === 0) return res.status(400).json({ error: "Invalid or expired reset code." });
+
+    const newHashedPassword = await bcrypt.hash(newPassword, 10);
+    
+    // Update password and erase the temporary reset code
+    await pool.query("UPDATE users SET password = $1, reset_code = NULL WHERE email = $2", [newHashedPassword, email.toLowerCase()]);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to reset password." });
   }
 });
 
@@ -381,7 +431,6 @@ function authenticateToken(req, res, next) {
     next();
   });
 }
-
 
 // --- CHAT & SESSION ROUTES ---
 app.get("/sessions", authenticateToken, async (req, res) => {
