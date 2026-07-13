@@ -284,13 +284,19 @@
         <button class="modal-close" onclick="closeAuthModal()">&times;</button>
         <h2 id="modalTitle" style="margin-bottom: 25px; text-align: center;">Sign In</h2>
         <div id="authError"></div>
-        <input type="text" id="authUsername" class="modal-input" placeholder="Username" />
+        
+        <input type="text" id="authUsername" class="modal-input" placeholder="Choose a Username" style="display: none;" />
+        <input type="email" id="authEmail" class="modal-input" placeholder="Email Address" />
         <input type="password" id="authPassword" class="modal-input" placeholder="Password" />
+        
+        <input type="text" id="authCode" class="modal-input" placeholder="Enter 6-Digit Email Code" style="display: none;" />
+        
         <button class="modal-btn" id="authSubmitBtn" onclick="handleAuth()">Sign In</button>
-        <div class="modal-toggle" id="authToggleBtn" onclick="toggleAuthMode()">Don't have an account? Sign Up</div>
+        
+        <div class="modal-toggle" id="authToggleBtn" onclick="changeAuthMode('signup')" style="margin-bottom: 10px;">Don't have an account? Sign Up</div>
+        <div class="modal-toggle" id="authForgotBtn" onclick="changeAuthMode('requestReset')" style="font-size: 12px; color: var(--accent);">Forgot Password?</div>
       </div>
     </div>
-
     <div class="modal-overlay" id="bookmarksModal">
       <div class="modal-content bookmarks-modal">
         <button class="modal-close" onclick="closeBookmarksModal()">&times;</button>
@@ -454,35 +460,124 @@
       }
       function closeBookmarksModal() { document.getElementById("bookmarksModal").style.display = "none"; }
       
-      function toggleAuthMode() {
-        isLoginMode = !isLoginMode;
-        document.getElementById("modalTitle").innerText = isLoginMode ? "Sign In" : "Create Account";
-        document.getElementById("authSubmitBtn").innerText = isLoginMode ? "Sign In" : "Sign Up";
-        document.getElementById("authToggleBtn").innerText = isLoginMode ? "Don't have an account? Sign Up" : "Already have an account? Sign In";
+      let currentAuthMode = 'login'; 
+      let recoveryEmail = '';
+
+      function changeAuthMode(mode) {
+        currentAuthMode = mode;
+        const title = document.getElementById("modalTitle");
+        const submitBtn = document.getElementById("authSubmitBtn");
+        const toggleBtn = document.getElementById("authToggleBtn");
+        const forgotBtn = document.getElementById("authForgotBtn");
+        
+        const userField = document.getElementById("authUsername");
+        const emailField = document.getElementById("authEmail");
+        const passField = document.getElementById("authPassword");
+        const codeField = document.getElementById("authCode");
+        
         document.getElementById("authError").style.display = "none";
+
+        if (mode === 'signup') {
+            title.innerText = "Create Account";
+            submitBtn.innerText = "Sign Up";
+            toggleBtn.innerText = "Already have an account? Sign In";
+            toggleBtn.setAttribute("onclick", "changeAuthMode('login')");
+            forgotBtn.style.display = "none";
+            userField.style.display = "block";
+            emailField.style.display = "block";
+            passField.style.display = "block";
+            passField.placeholder = "Choose Password";
+            codeField.style.display = "none";
+        } else if (mode === 'requestReset') {
+            title.innerText = "Reset Password";
+            submitBtn.innerText = "Send Recovery Code";
+            toggleBtn.innerText = "Back to Sign In";
+            toggleBtn.setAttribute("onclick", "changeAuthMode('login')");
+            forgotBtn.style.display = "none";
+            userField.style.display = "none";
+            emailField.style.display = "block";
+            passField.style.display = "none";
+            codeField.style.display = "none";
+        } else if (mode === 'enterCode') {
+            title.innerText = "Enter Code";
+            submitBtn.innerText = "Update Password";
+            toggleBtn.style.display = "none";
+            forgotBtn.style.display = "none";
+            userField.style.display = "none";
+            emailField.style.display = "none";
+            passField.style.display = "block";
+            passField.placeholder = "Choose New Password";
+            codeField.style.display = "block";
+        } else {
+            title.innerText = "Sign In";
+            submitBtn.innerText = "Sign In";
+            toggleBtn.innerText = "Don't have an account? Sign Up";
+            toggleBtn.style.display = "block";
+            toggleBtn.setAttribute("onclick", "changeAuthMode('signup')");
+            forgotBtn.style.display = "block";
+            userField.style.display = "none";
+            emailField.style.display = "block";
+            passField.style.display = "block";
+            passField.placeholder = "Password";
+            codeField.style.display = "none";
+        }
       }
 
       async function handleAuth() {
         const u = document.getElementById("authUsername").value.trim();
+        const e = document.getElementById("authEmail").value.trim();
         const p = document.getElementById("authPassword").value.trim();
+        const c = document.getElementById("authCode").value.trim();
         const errorDiv = document.getElementById("authError");
-        if (!u || !p) { errorDiv.innerText = "Please enter both fields."; errorDiv.style.display = "block"; return; }
+        
+        let targetUrl = "";
+        let requestBody = {};
+
+        if (currentAuthMode === 'signup') {
+            if (!u || !e || !p) return showError("All fields required.");
+            targetUrl = "/signup"; requestBody = { username: u, email: e, password: p };
+        } else if (currentAuthMode === 'login') {
+            if (!e || !p) return showError("Email and password required.");
+            targetUrl = "/login"; requestBody = { email: e, password: p };
+        } else if (currentAuthMode === 'requestReset') {
+            if (!e) return showError("Email is required.");
+            targetUrl = "/request-reset"; requestBody = { email: e };
+            submitBtn = document.getElementById("authSubmitBtn");
+            submitBtn.innerText = "Sending...";
+        } else if (currentAuthMode === 'enterCode') {
+            if (!c || !p) return showError("Code and new password required.");
+            targetUrl = "/reset-password"; requestBody = { email: recoveryEmail, code: c, newPassword: p };
+        }
+
+        function showError(msg) { errorDiv.innerText = msg; errorDiv.style.display = "block"; }
 
         try {
-          const res = await fetch(isLoginMode ? "/login" : "/signup", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username: u, password: p }),
+          const res = await fetch(targetUrl, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody),
           });
           const data = await res.json();
+          
           if (res.ok) {
-            token = data.token; username = data.username;
-            localStorage.setItem("token", token); localStorage.setItem("username", username);
-            closeAuthModal(); updateProfileUI(); fetchSidebarSessions(); fetchBookmarks(); startNewChat();
+            if (currentAuthMode === 'requestReset') {
+                recoveryEmail = e; // Save email for the next step
+                changeAuthMode('enterCode');
+                showError("A 6-digit code has been sent to your email!");
+                errorDiv.style.color = "#10b981"; // green success
+            } else if (currentAuthMode === 'enterCode') {
+                alert("Password reset successfully! Please log in.");
+                changeAuthMode('login');
+            } else {
+                token = data.token; username = data.username;
+                localStorage.setItem("token", token); localStorage.setItem("username", username);
+                closeAuthModal(); updateProfileUI(); fetchSidebarSessions(); fetchBookmarks(); startNewChat();
+            }
           } else {
-            errorDiv.innerText = data.error; errorDiv.style.display = "block";
+            document.getElementById("authSubmitBtn").innerText = currentAuthMode === 'requestReset' ? "Send Recovery Code" : document.getElementById("authSubmitBtn").innerText;
+            errorDiv.style.color = "#ef4444";
+            showError(data.error);
           }
-        } catch (e) {
-          errorDiv.innerText = "Connection error."; errorDiv.style.display = "block";
+        } catch (err) {
+          showError("Connection error.");
         }
       }
 
