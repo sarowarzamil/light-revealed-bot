@@ -353,7 +353,7 @@ function splitMessage(text, maxLength = 1950) {
 // --- AUTHENTICATION ROUTES ---
 app.post("/signup", async (req, res) => {
   const { username, email, password } = req.body;
-  if (!username || !email || !password) return res.status(400).json({ error: "Username, email, and password required." });
+  if (!username || !email || !password) return res.status(400).json({ error: "All fields required." });
 
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -361,8 +361,27 @@ app.post("/signup", async (req, res) => {
       "INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id",
       [username, email.toLowerCase(), hashedPassword]
     );
+    
     const token = jwt.sign({ id: result.rows[0].id, username }, process.env.JWT_SECRET);
+    
+    // IMMEDIATELY return success to the browser
     res.json({ token, username });
+
+    // BACKGROUND TASK: Send welcome email without making the browser wait
+    // We wrap this in a try/catch so even if email fails, the user is still logged in
+    (async () => {
+        try {
+            await transporter.sendMail({
+                from: `"Light Revealed" <${process.env.EMAIL_USER}>`,
+                to: email,
+                subject: "Welcome to Light Revealed!",
+                text: `Hello ${username},\n\nYour account has been successfully created!`
+            });
+        } catch (err) {
+            console.error("Background email failed:", err);
+        }
+    })();
+
   } catch (error) {
     res.status(400).json({ error: "Username or Email already exists." });
   }
