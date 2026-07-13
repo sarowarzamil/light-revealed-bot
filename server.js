@@ -8,18 +8,7 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const { verifyKey } = require("discord-interactions"); 
 const { Client, GatewayIntentBits } = require("discord.js");
-const nodemailer = require("nodemailer");
 
-// Initialize Gmail Transporter
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true, // Use SSL
-  auth: {
-    user: process.env.EMAIL_USER, // Your Gmail
-    pass: process.env.EMAIL_PASS  // Your 16-char App Password (no spaces)
-  }
-});
 const app = express();
 app.use(cors());
 
@@ -137,7 +126,6 @@ async function buildMasterBrain(isForceSync = false) {
 
     broadcastSyncUpdate("🔍 Diff Analysis: Comparing Google Doc with Supabase indices...", "info");
 
-    // Fetch existing chunks ONLY if we didn't just wipe the database
     let existingDbChunks = new Map();
     if (!isForceSync) {
         const existingRes = await pool.query("SELECT id, content FROM knowledge_chunks");
@@ -363,7 +351,6 @@ app.post("/signup", async (req, res) => {
     
     const token = jwt.sign({ id: result.rows[0].id, username }, process.env.JWT_SECRET);
     
-    // Return success instantly. No email logic here.
     res.json({ token, username });
 
   } catch (error) {
@@ -376,7 +363,7 @@ app.post("/signup", async (req, res) => {
 });
 
 app.post("/login", async (req, res) => {
-  const { email, password } = req.body; // Now logs in with Email!
+  const { email, password } = req.body;
   try {
     const result = await pool.query("SELECT * FROM users WHERE email = $1", [email.toLowerCase()]);
     const user = result.rows[0];
@@ -392,6 +379,7 @@ app.post("/login", async (req, res) => {
   }
 });
 
+// --- NEW BREVO API PASSWORD RESET ---
 app.post("/request-reset", async (req, res) => {
   const { email } = req.body;
   console.log("DEBUG: Starting reset process for:", email);
@@ -406,21 +394,34 @@ app.post("/request-reset", async (req, res) => {
     const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
     await pool.query("UPDATE users SET reset_code = $1 WHERE email = $2", [resetCode, email.toLowerCase()]);
 
-    // Force the server to show us what it's doing
-    console.log("DEBUG: Attempting to send email via Nodemailer...");
+    console.log("DEBUG: Attempting to send email via Brevo API...");
     
-    await transporter.sendMail({
-        from: `"Light Revealed" <${process.env.EMAIL_USER}>`,
-        to: email,
-        subject: "Password Reset Code",
-        text: `Hello ${result.rows[0].username},\n\nYour 6-digit password reset code is: ${resetCode}`
+    // Using native node fetch to bypass Render SMTP block
+    const brevoResponse = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+            'accept': 'application/json',
+            'api-key': process.env.BREVO_API_KEY,
+            'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+            sender: { name: "Light Revealed", email: process.env.EMAIL_USER },
+            to: [{ email: email.toLowerCase() }],
+            subject: "Password Reset Code",
+            htmlContent: `<p>Hello ${result.rows[0].username},</p><p>Your 6-digit password reset code is: <strong>${resetCode}</strong></p><p>If you didn't request this, you can ignore this email.</p>`
+        })
     });
+
+    if (!brevoResponse.ok) {
+        const errorData = await brevoResponse.json();
+        console.error("DEBUG CRITICAL: Brevo API Error:", errorData);
+        return res.status(500).json({ error: "Failed to send email API request." });
+    }
 
     console.log("DEBUG: Email function completed successfully!");
     res.json({ success: true, message: "Code sent!" });
 
   } catch (error) {
-    // This is the most important part!
     console.error("DEBUG: FAILED at:", error); 
     res.status(500).json({ error: "Failed to process: " + error.message });
   }
@@ -434,7 +435,6 @@ app.post("/reset-password", async (req, res) => {
 
     const newHashedPassword = await bcrypt.hash(newPassword, 10);
     
-    // Update password and erase the temporary reset code
     await pool.query("UPDATE users SET password = $1, reset_code = NULL WHERE email = $2", [newHashedPassword, email.toLowerCase()]);
     res.json({ success: true });
   } catch (error) {
@@ -563,7 +563,6 @@ app.post("/chat", authenticateToken, async (req, res) => {
     }
 
     if (!isGuest) {
-      // SMART MEMORY: Grabs only the LAST 6 messages to drastically save free DB usage!
       const histRes = await pool.query(`
         SELECT role, content FROM (
           SELECT id, role, content FROM messages 
@@ -580,11 +579,9 @@ app.post("/chat", authenticateToken, async (req, res) => {
     const botReply = await processCoreAIRequestWithRetry(message, currentHistory);
 
     if (!isGuest) {
-      // 1. Save the new messages
       await pool.query("INSERT INTO messages (user_id, session_id, role, content) VALUES ($1, $2, $3, $4)", [req.user.id, sessionId, "user", message]);
       await pool.query("INSERT INTO messages (user_id, session_id, role, content) VALUES ($1, $2, $3, $4)", [req.user.id, sessionId, "model", botReply]);
       
-      // 2. Rolling Cleanup: Keep only the newest 1000 rows (500 interactions) per user
       await pool.query(`
         DELETE FROM messages 
         WHERE id IN (
@@ -597,7 +594,7 @@ app.post("/chat", authenticateToken, async (req, res) => {
     } else {
       currentHistory.push({ role: "user", content: message });
       currentHistory.push({ role: "model", content: botReply });
-      if (currentHistory.length > 6) currentHistory = currentHistory.slice(-6); // Keeps guest memory lightweight too
+      if (currentHistory.length > 6) currentHistory = currentHistory.slice(-6);
       guestMemoryMap.set(sessionId, currentHistory);
     }
 
@@ -669,7 +666,6 @@ app.post("/api/update-limit", async (req, res) => {
   }
 });
 
-// NEW: Global User Limit
 app.post("/api/admin/users/limit-all", async (req, res) => {
   const { newLimit } = req.body;
   try {
@@ -678,14 +674,12 @@ app.post("/api/admin/users/limit-all", async (req, res) => {
   } catch (e) { res.status(500).json({ error: "Update failed" }); }
 });
 
-// NEW: Database Dashboard Stats (Now reads raw DB Byte Size!)
 app.get("/api/admin/stats", async (req, res) => {
   try {
     const usersCount = await pool.query("SELECT COUNT(*) FROM users");
     const chunksCount = await pool.query("SELECT COUNT(*) FROM knowledge_chunks");
     const msgsCount = await pool.query("SELECT COUNT(*) FROM messages");
     
-    // Fetch actual PostgreSQL database size
     const dbSizeRes = await pool.query("SELECT pg_database_size(current_database()) as bytes");
     const bytes = parseInt(dbSizeRes.rows[0].bytes);
     const mbSize = (bytes / (1024 * 1024)).toFixed(2);
@@ -897,15 +891,12 @@ if (process.env.DISCORD_TOKEN) {
   discordClient.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // 🔒 CHANNEL LOCK: Only process messages in your dedicated channel
     if (process.env.DISCORD_CHANNEL_ID && message.channel.id !== process.env.DISCORD_CHANNEL_ID) {
       return; 
     }
 
-    // 1. Send the initial typing indicator
     await message.channel.sendTyping();
     
-    // 2. Set up a loop to refresh the typing indicator every 9 seconds
     const typingInterval = setInterval(() => {
         message.channel.sendTyping().catch(console.error);
     }, 9000);
@@ -913,21 +904,19 @@ if (process.env.DISCORD_TOKEN) {
     try {
       const userQuery = message.content.replace(/<@!?\d+>/g, '').trim();
       if (!userQuery) {
-          clearInterval(typingInterval); // Stop typing if message is empty
+          clearInterval(typingInterval);
           return;
       }
 
       const botReply = await processCoreAIRequestWithRetry(userQuery, []);
       const chunks = splitMessage(botReply);
 
-      // 3. The AI has finished thinking! Stop the typing loop immediately.
       clearInterval(typingInterval);
 
       for (const chunk of chunks) {
         await message.reply(chunk);
       }
     } catch (error) {
-      // 🛑 Ensure the typing loop stops if an error crashes the process
       clearInterval(typingInterval);
       
       console.error("❌ Native Chat Technical Failure Details:");
