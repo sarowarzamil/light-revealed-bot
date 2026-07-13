@@ -503,13 +503,26 @@
       async function executeBulkDelete() {
         const ids = getSelectedIds();
         try {
-          await fetch("/api/admin/users/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userIds: ids }) });
+          const res = await fetch("/api/admin/users/delete", { 
+            method: "POST", 
+            headers: { "Content-Type": "application/json" }, 
+            body: JSON.stringify({ userIds: ids }) 
+          });
+          
+          // NEW: Check if the server actually succeeded before hiding the user!
+          if (!res.ok) {
+              alert("The server blocked the deletion. Check your server.js or database.");
+              return;
+          }
+
           allUsers = allUsers.filter(u => !ids.includes(u.id));
           clearSelection();
           closeModal("deleteConfirmModal");
           loadStats();
           document.getElementById("totalUserCountUI").innerText = `Total Users: ${allUsers.length}`;
-        } catch(e) { alert("Delete failed"); }
+        } catch(e) { 
+          alert("Network error: Delete failed"); 
+        }
       }
 
       async function bulkResetLimits() {
