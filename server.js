@@ -364,26 +364,32 @@ app.post("/signup", async (req, res) => {
     
     const token = jwt.sign({ id: result.rows[0].id, username }, process.env.JWT_SECRET);
     
-    // IMMEDIATELY return success to the browser
+    // --- STEP 1: IMMEDIATELY send success to browser ---
     res.json({ token, username });
 
-    // BACKGROUND TASK: Send welcome email without making the browser wait
-    // We wrap this in a try/catch so even if email fails, the user is still logged in
-    (async () => {
-        try {
-            await transporter.sendMail({
-                from: `"Light Revealed" <${process.env.EMAIL_USER}>`,
-                to: email,
-                subject: "Welcome to Light Revealed!",
-                text: `Hello ${username},\n\nYour account has been successfully created!`
-            });
-        } catch (err) {
-            console.error("Background email failed:", err);
-        }
-    })();
+    // --- STEP 2: Handle email in the "background" ---
+    // The browser doesn't wait for this, so no timeout will ever happen.
+    setImmediate(async () => {
+      try {
+        await transporter.sendMail({
+            from: `"Light Revealed" <${process.env.EMAIL_USER}>`,
+            to: email,
+            subject: "Welcome to Light Revealed!",
+            text: `Hello ${username},\n\nYour account has been successfully created!`
+        });
+        console.log("Welcome email sent successfully to:", email);
+      } catch (err) {
+        console.error("Background email failed (this won't break your signup):", err);
+      }
+    });
 
   } catch (error) {
-    res.status(400).json({ error: "Username or Email already exists." });
+    // Check if the error is a duplicate email/username
+    if (error.code === '23505') {
+        res.status(400).json({ error: "Username or Email already exists." });
+    } else {
+        res.status(500).json({ error: "Database error occurred." });
+    }
   }
 });
 
