@@ -380,9 +380,18 @@ app.post("/login", async (req, res) => {
 });
 
 // --- NEW BREVO API PASSWORD RESET ---
+// --- NEW BREVO API PASSWORD RESET ---
 app.post("/request-reset", async (req, res) => {
   const { email } = req.body;
   console.log("DEBUG: Starting reset process for:", email);
+
+  // 🔍 SAFETY CHECKPOINT: Let's see what Render is sending to the server
+  const apiKey = process.env.BREVO_API_KEY;
+  if (!apiKey) {
+      console.error("DEBUG CRITICAL: BREVO_API_KEY is completely MISSING or blank in Render Environment settings!");
+  } else {
+      console.log(`DEBUG: BREVO_API_KEY found. Starts with: "${apiKey.substring(0, 5)}..." (Total length: ${apiKey.length} characters)`);
+  }
 
   try {
     const result = await pool.query("SELECT id, username FROM users WHERE email = $1", [email.toLowerCase()]);
@@ -396,12 +405,11 @@ app.post("/request-reset", async (req, res) => {
 
     console.log("DEBUG: Attempting to send email via Brevo API...");
     
-    // Using native node fetch to bypass Render SMTP block
     const brevoResponse = await fetch('https://api.brevo.com/v3/smtp/email', {
         method: 'POST',
         headers: {
             'accept': 'application/json',
-            'api-key': process.env.BREVO_API_KEY,
+            'api-key': apiKey, // Using validated key variable
             'content-type': 'application/json'
         },
         body: JSON.stringify({
