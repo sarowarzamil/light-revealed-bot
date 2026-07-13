@@ -523,33 +523,41 @@
         }
       }
 
-      async function handleAuth() {
+async function handleAuth() {
         const u = document.getElementById("authUsername").value.trim();
         const e = document.getElementById("authEmail").value.trim();
         const p = document.getElementById("authPassword").value.trim();
         const c = document.getElementById("authCode").value.trim();
         const errorDiv = document.getElementById("authError");
+        const submitBtn = document.getElementById("authSubmitBtn");
         
         let targetUrl = "";
         let requestBody = {};
 
+        // Helper function to easily show Error (red) or Success (green) messages
+        function showMessage(msg, isSuccess = false) { 
+            errorDiv.innerText = msg; 
+            errorDiv.style.display = "block"; 
+            errorDiv.style.color = isSuccess ? "#10b981" : "#ef4444"; 
+        }
+
         if (currentAuthMode === 'signup') {
-            if (!u || !e || !p) return showError("All fields required.");
+            if (!u || !e || !p) return showMessage("All fields required.", false);
             targetUrl = "/signup"; requestBody = { username: u, email: e, password: p };
         } else if (currentAuthMode === 'login') {
-            if (!e || !p) return showError("Email and password required.");
+            if (!e || !p) return showMessage("Email and password required.", false);
             targetUrl = "/login"; requestBody = { email: e, password: p };
         } else if (currentAuthMode === 'requestReset') {
-            if (!e) return showError("Email is required.");
+            if (!e) return showMessage("Email is required.", false);
             targetUrl = "/request-reset"; requestBody = { email: e };
-            submitBtn = document.getElementById("authSubmitBtn");
-            submitBtn.innerText = "Sending...";
         } else if (currentAuthMode === 'enterCode') {
-            if (!c || !p) return showError("Code and new password required.");
+            if (!c || !p) return showMessage("Code and new password required.", false);
             targetUrl = "/reset-password"; requestBody = { email: recoveryEmail, code: c, newPassword: p };
         }
 
-        function showError(msg) { errorDiv.innerText = msg; errorDiv.style.display = "block"; }
+        const originalBtnText = submitBtn.innerText;
+        submitBtn.innerText = "Processing...";
+        submitBtn.disabled = true;
 
         try {
           const res = await fetch(targetUrl, {
@@ -557,27 +565,46 @@
           });
           const data = await res.json();
           
+          submitBtn.innerText = originalBtnText;
+          submitBtn.disabled = false;
+
           if (res.ok) {
+            // --- SUCCESS MESSAGE LOGIC ---
             if (currentAuthMode === 'requestReset') {
-                recoveryEmail = e; // Save email for the next step
+                recoveryEmail = e; 
                 changeAuthMode('enterCode');
-                showError("A 6-digit code has been sent to your email!");
-                errorDiv.style.color = "#10b981"; // green success
+                showMessage("A 6-digit code has been sent to your email!", true);
+                
             } else if (currentAuthMode === 'enterCode') {
-                alert("Password reset successfully! Please log in.");
-                changeAuthMode('login');
+                // Forgot Password Final Success
+                showMessage("Password reset successfully! You can now sign in.", true);
+                setTimeout(() => {
+                    changeAuthMode('login');
+                    errorDiv.style.display = "none";
+                }, 2000); // 2-second pause to read message
+                
+            } else if (currentAuthMode === 'signup') {
+                // Sign Up Success
+                showMessage("Account created successfully! Logging you in...", true);
+                setTimeout(() => {
+                    token = data.token; username = data.username;
+                    localStorage.setItem("token", token); localStorage.setItem("username", username);
+                    closeAuthModal(); updateProfileUI(); fetchSidebarSessions(); fetchBookmarks(); startNewChat();
+                }, 1500); // 1.5-second pause to read message
+                
             } else {
+                // Sign In (No message, instant login)
                 token = data.token; username = data.username;
                 localStorage.setItem("token", token); localStorage.setItem("username", username);
                 closeAuthModal(); updateProfileUI(); fetchSidebarSessions(); fetchBookmarks(); startNewChat();
             }
           } else {
-            document.getElementById("authSubmitBtn").innerText = currentAuthMode === 'requestReset' ? "Send Recovery Code" : document.getElementById("authSubmitBtn").innerText;
-            errorDiv.style.color = "#ef4444";
-            showError(data.error);
+            showMessage(data.error, false);
           }
         } catch (err) {
-          showError("Connection error.");
+          submitBtn.innerText = originalBtnText;
+          submitBtn.disabled = false;
+          showMessage("Connection error. Please try again.", false);
         }
       }
 
