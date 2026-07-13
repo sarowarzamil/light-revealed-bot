@@ -10,17 +10,16 @@ const { verifyKey } = require("discord-interactions");
 const { Client, GatewayIntentBits } = require("discord.js");
 const nodemailer = require("nodemailer");
 
-// Set up the robust Gmail sender
+// Initialize Resend with your API Key
 const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
+  host: 'smtp.resend.com',
+  secure: true,
   port: 465,
-  secure: true, // Requires SSL encryption
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
+    user: 'resend', // This is always 'resend'
+    pass: process.env.RESEND_API_KEY // Put your API Key in your Render env variables
   }
 });
-
 const app = express();
 app.use(cors());
 
@@ -364,27 +363,10 @@ app.post("/signup", async (req, res) => {
     
     const token = jwt.sign({ id: result.rows[0].id, username }, process.env.JWT_SECRET);
     
-    // --- STEP 1: IMMEDIATELY send success to browser ---
+    // Return success instantly. No email logic here.
     res.json({ token, username });
 
-    // --- STEP 2: Handle email in the "background" ---
-    // The browser doesn't wait for this, so no timeout will ever happen.
-    setImmediate(async () => {
-      try {
-        await transporter.sendMail({
-            from: `"Light Revealed" <${process.env.EMAIL_USER}>`,
-            to: email,
-            subject: "Welcome to Light Revealed!",
-            text: `Hello ${username},\n\nYour account has been successfully created!`
-        });
-        console.log("Welcome email sent successfully to:", email);
-      } catch (err) {
-        console.error("Background email failed (this won't break your signup):", err);
-      }
-    });
-
   } catch (error) {
-    // Check if the error is a duplicate email/username
     if (error.code === '23505') {
         res.status(400).json({ error: "Username or Email already exists." });
     } else {
