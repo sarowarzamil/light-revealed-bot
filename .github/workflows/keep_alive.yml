@@ -4,7 +4,7 @@ on:
   schedule:
     # Runs at 00:00 UTC every Tuesday and Friday
     - cron: '0 0 * * 2,5'
-  workflow_dispatch: # Allows manual triggering from the Actions tab
+  workflow_dispatch:
 
 jobs:
   ping-supabase:
@@ -12,6 +12,5 @@ jobs:
     steps:
       - name: Ping Supabase Database
         run: |
-          curl -s -X GET "${{ secrets.SUPABASE_URL }}/rest/v1/" \
-            -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
+          curl -s -X GET "${{ secrets.SUPABASE_URL }}/rest/v1/?apikey=${{ secrets.SUPABASE_KEY }}" \
             -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}"
