@@ -548,35 +548,57 @@ app.post("/chat", authenticateToken, async (req, res) => {
   try {
     let currentHistory = [];
 
+    const now = Date.now();
+    const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+    
     if (!isGuest) {
-      const userRes = await pool.query("SELECT daily_chat_count, custom_limit, last_reset_date FROM users WHERE id = $1", [req.user.id]);
+      // Check logged-in user limits
+      const userRes = await pool.query("SELECT burst_count, last_message_time FROM users WHERE id = $1", [req.user.id]);
+      
       if (userRes.rows.length > 0) {
         const userData = userRes.rows[0];
-        const lastReset = userData.last_reset_date ? new Date(userData.last_reset_date).toISOString().split('T')[0] : '';
+        const lastMessageTime = userData.last_message_time ? new Date(userData.last_message_time).getTime() : 0;
         
-        if (lastReset !== today) {
-          await pool.query("UPDATE users SET daily_chat_count = 0, last_reset_date = CURRENT_DATE WHERE id = $1", [req.user.id]);
-          userData.daily_chat_count = 0;
+        let currentBurstCount = userData.burst_count || 0;
+
+        // Reset the burst count if 2 hours have passed since their last message
+        if (now - lastMessageTime >= TWO_HOURS_MS) {
+          currentBurstCount = 0;
         }
 
-        if (userData.daily_chat_count >= userData.custom_limit) {
-          return res.json({ reply: "⚠️ Your daily chat limit has been reached. Please contact the admin or try again tomorrow." });
+        // If they hit the limit, calculate remaining time and block the message
+        if (currentBurstCount >= 5) {
+          const minutesLeft = Math.ceil((TWO_HOURS_MS - (now - lastMessageTime)) / 60000);
+          return res.json({ reply: `⚠️ You've sent 5 messages. Please wait ${minutesLeft} minutes to catch your breath before chatting again.` });
         }
-        await pool.query("UPDATE users SET daily_chat_count = daily_chat_count + 1 WHERE id = $1", [req.user.id]);
+
+        // Increment count and update timestamp
+        await pool.query(
+          "UPDATE users SET burst_count = $1, last_message_time = CURRENT_TIMESTAMP WHERE id = $2",
+          [currentBurstCount + 1, req.user.id]
+        );
       }
     } else {
+      // Check guest limits (IP based)
       const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
-      if (!guestRateLimitMap.has(ip)) guestRateLimitMap.set(ip, { count: 0, date: today });
       
+      if (!guestRateLimitMap.has(ip)) {
+        guestRateLimitMap.set(ip, { count: 0, lastMessageTime: 0 });
+      }
       const guestData = guestRateLimitMap.get(ip);
-      if (guestData.date !== today) {
+      
+      // Reset guest count if 2 hours have passed
+      if (now - guestData.lastMessageTime >= TWO_HOURS_MS) {
         guestData.count = 0;
-        guestData.date = today;
       }
+
       if (guestData.count >= 5) {
-        return res.json({ reply: "⚠️ Guest daily chat limit (5) reached. Please Sign Up to continue chatting, or try again tomorrow." });
+        const minutesLeft = Math.ceil((TWO_HOURS_MS - (now - guestData.lastMessageTime)) / 60000);
+        return res.json({ reply: `⚠️ Guest limit reached. Please wait ${minutesLeft} minutes or Sign Up to continue.` });
       }
+
       guestData.count += 1;
+      guestData.lastMessageTime = now;
     }
 
     if (!isGuest) {
