@@ -501,7 +501,20 @@
         });
       }
 
-      function openAuthModal() { document.getElementById("authModal").style.display = "flex"; }
+      function openAuthModal() { 
+    // 1. Force the modal back to the default Sign In state
+    changeAuthMode('login');
+    
+    // 2. Clear out any old inputs so it looks fresh
+    document.getElementById("authUsername").value = "";
+    document.getElementById("authEmail").value = "";
+    document.getElementById("authPassword").value = "";
+    document.getElementById("authCode").value = "";
+    document.getElementById("authError").style.display = "none";
+    
+    // 3. Finally, show the modal
+    document.getElementById("authModal").style.display = "flex"; 
+}
       function closeAuthModal() { document.getElementById("authModal").style.display = "none"; document.getElementById("authError").style.display = "none"; }
       
       function openBookmarksModal() { 
@@ -530,7 +543,8 @@
         if (mode === 'signup') {
             title.innerText = "Create Account";
             submitBtn.innerText = "Sign Up";
-            toggleBtn.innerText = "Already have an account? Sign In";
+            // NEW: Added innerHTML and span for styling
+            toggleBtn.innerHTML = "Already have an account? <span style='font-weight: bold;'>Sign In</span>";
             toggleBtn.setAttribute("onclick", "changeAuthMode('login')");
             forgotBtn.style.display = "none";
             userField.style.display = "block";
@@ -541,7 +555,8 @@
         } else if (mode === 'requestReset') {
             title.innerText = "Reset Password";
             submitBtn.innerText = "Send Recovery Code";
-            toggleBtn.innerText = "Back to Sign In";
+            // NEW: Added innerHTML and span for styling
+            toggleBtn.innerHTML = "<span style='font-weight: bold;'>Back to Sign In</span>";
             toggleBtn.setAttribute("onclick", "changeAuthMode('login')");
             forgotBtn.style.display = "none";
             userField.style.display = "none";
@@ -561,7 +576,8 @@
         } else {
             title.innerText = "Sign In";
             submitBtn.innerText = "Sign In";
-            toggleBtn.innerText = "Don't have an account? Sign Up";
+            // NEW: Added innerHTML and span for styling
+            toggleBtn.innerHTML = "Don't have an account? <span style='font-weight: bold;'>Sign Up</span>";
             toggleBtn.style.display = "block";
             toggleBtn.setAttribute("onclick", "changeAuthMode('signup')");
             forgotBtn.style.display = "block";
