@@ -249,18 +249,59 @@
 
     </main>
 
-    <script>
-      // --- AUTH & INITIALIZATION ---
-      function checkPassword() {
-        const pass = document.getElementById("adminPassword").value;
-        if (pass === "shawon300") { // Update password here if needed
-          document.getElementById("lockScreen").style.display = "none";
-          initDashboard();
-        } else {
-          document.getElementById("lockError").style.display = "block";
+   <script>
+      let adminToken = sessionStorage.getItem("adminToken");
+
+      // Check on load if already authenticated
+      window.onload = () => {
+        if (adminToken) {
+           document.getElementById("lockScreen").style.display = "none";
+           initDashboard();
         }
+      };
+
+      // --- AUTH & INITIALIZATION ---
+      async function checkPassword() {
+        const pass = document.getElementById("adminPassword").value;
+        const btn = document.querySelector("#lockScreen button");
+        btn.innerText = "Verifying...";
+        
+        try {
+          const res = await fetch("/api/admin/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: pass })
+          });
+          
+          if (res.ok) {
+            const data = await res.json();
+            adminToken = data.token;
+            sessionStorage.setItem("adminToken", adminToken); // Keeps you logged in until tab closes
+            document.getElementById("lockScreen").style.display = "none";
+            document.getElementById("lockError").style.display = "none";
+            initDashboard();
+          } else {
+            document.getElementById("lockError").style.display = "block";
+          }
+        } catch (e) {
+           document.getElementById("lockError").innerText = "Server connection failed.";
+           document.getElementById("lockError").style.display = "block";
+        }
+        btn.innerText = "Unlock Dashboard";
       }
+      
       function handleEnter(e) { if (e.key === 'Enter') checkPassword(); }
+
+      // Helper function to auto-attach the security token to all fetches
+      async function secureFetch(url, options = {}) {
+         const headers = { ...options.headers, "x-admin-token": adminToken };
+         const response = await fetch(url, { ...options, headers });
+         if (response.status === 401 || response.status === 403) {
+             sessionStorage.removeItem("adminToken");
+             location.reload(); // Kick them out if token expires
+         }
+         return response;
+      }
 
       function switchTab(tabId, el) {
         document.querySelectorAll('.tab-pane').forEach(t => t.classList.remove('active'));
@@ -281,14 +322,13 @@
 
       async function loadStats() {
         try {
-          const res = await fetch("/api/admin/stats");
+          const res = await secureFetch("/api/admin/stats");
           const data = await res.json();
           document.getElementById("kbChunkCount").innerText = `Total Synced Chunks: ${data.chunks}`;
           document.getElementById("stat-users").innerText = data.users;
           document.getElementById("stat-msgs").innerText = data.messages;
           document.getElementById("stat-chunks").innerText = data.chunks;
 
-          // DB SIZE LOGIC
           const usedMB = data.dbSizeMB || 0;
           const limitMB = 500;
           const percentage = Math.min((usedMB / limitMB) * 100, 100).toFixed(1);
@@ -321,7 +361,7 @@
 
       // --- TAB 1: KNOWLEDGE BASE LOGIC ---
       async function loadSettings() {
-        const res = await fetch("/api/settings");
+        const res = await secureFetch("/api/settings");
         const data = await res.json();
         document.getElementById("sysInstructionInput").value = data.systemInstruction || "";
       }
@@ -329,7 +369,7 @@
       async function saveSettingsToCloud() {
         const instruction = document.getElementById("sysInstructionInput").value;
         try {
-          await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ systemInstruction: instruction }) });
+          await secureFetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ systemInstruction: instruction }) });
           alert("Persona Configuration Saved!");
         } catch (e) { alert("Failed to save settings."); }
       }
@@ -356,17 +396,16 @@
           if (isForce && !confirm("⚠️ WARNING: Force Re-Sync will delete all knowledge and rebuild from scratch. Proceed?")) return;
           const terminal = document.getElementById("ui-sync-terminal");
           terminal.innerHTML = `<div style="color: #10b981;">[Signal Sent] Booting engine arrays...</div>`;
-          await fetch("/api/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: isForce }) });
+          await secureFetch("/api/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: isForce }) });
       }
 
       // --- TAB 2: USER MANAGEMENT LOGIC ---
       let allUsers = [];
       let currentPage = 1;
-      const usersPerPage = 10; // Exactly 10 users per page
+      const usersPerPage = 10; 
       let sortAscending = false; 
-      let selectedUserIds = new Set(); // Smart selection tracking
+      let selectedUserIds = new Set(); 
 
-      // Relative Date Formatter
       function formatRelativeTime(dateStr) {
         if (!dateStr) return "Never";
         const date = new Date(dateStr);
@@ -382,7 +421,7 @@
 
       async function loadUsers() {
         try {
-          const res = await fetch("/api/users");
+          const res = await secureFetch("/api/users");
           allUsers = await res.json();
           document.getElementById("totalUserCountUI").innerText = `Total Users: ${allUsers.length}`;
           renderUserTable();
@@ -398,12 +437,18 @@
       }
 
       function renderUserTable() {
+        // UI Updates for Burst Terminology
+        document.querySelector("th:nth-child(4)").innerText = "Current Burst";
+        document.querySelector("th:nth-child(6)").innerText = "Burst Limit";
+        document.querySelector(".flex-between + .card h3").innerText = "Set Global Burst Limit";
+        document.querySelector(".flex-between + .card p").innerText = "Apply a universal maximum burst allowance.";
+        document.querySelector("button[onclick='bulkResetLimits()']").innerText = "Reset Cooldowns";
+
         const query = document.getElementById("userSearchInput").value.toLowerCase();
         const sortKey = document.getElementById("sortSelect").value;
 
         let filtered = allUsers.filter(u => u.username.toLowerCase().includes(query));
 
-        // Smart Sorting
         filtered.sort((a, b) => {
             let valA, valB;
             if (sortKey === 'name') { valA = a.username.toLowerCase(); valB = b.username.toLowerCase(); }
@@ -421,12 +466,13 @@
         const tbody = document.getElementById("userTableBody");
         tbody.innerHTML = paginated.map(u => {
           const isChecked = selectedUserIds.has(u.id) ? "checked" : "";
+          // USING burst_count instead of daily_chat_count
           return `
           <tr>
             <td><input type="checkbox" class="user-checkbox" value="${u.id}" ${isChecked} onchange="toggleSingleSelection(this)"></td>
             <td style="font-weight: 500;">${u.username}</td>
             <td>${u.cc_total || 0}</td>
-            <td>${u.daily_chat_count || 0}</td>
+            <td style="color: var(--accent-blue); font-weight: bold;">${u.burst_count || 0}</td>
             <td style="color: var(--text-muted); font-size: 13px;">${formatRelativeTime(u.last_active)}</td>
             <td>
               <div style="display: flex; gap: 8px;">
@@ -448,10 +494,10 @@
       async function updateLimit(userId) {
         const newLimit = document.getElementById(`limit-${userId}`).value;
         try {
-          await fetch("/api/update-limit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId, newLimit }) });
+          await secureFetch("/api/update-limit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId, newLimit }) });
           const userIndex = allUsers.findIndex(u => u.id === userId);
           if(userIndex > -1) allUsers[userIndex].custom_limit = newLimit;
-          alert("Limit saved!");
+          alert("Burst limit saved!");
         } catch (e) { alert("Failed to update."); }
       }
 
@@ -459,10 +505,10 @@
         const newLimit = document.getElementById("globalLimitInput").value;
         if (!newLimit || newLimit < 0) return alert("Please enter a valid number.");
         try {
-          await fetch("/api/admin/users/limit-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ newLimit }) });
+          await secureFetch("/api/admin/users/limit-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ newLimit }) });
           allUsers.forEach(u => u.custom_limit = newLimit);
           renderUserTable();
-          alert("Global limit applied to all users.");
+          alert("Global burst limit applied to all users.");
         } catch (e) { alert("Failed to apply global limit."); }
       }
 
@@ -482,7 +528,7 @@
 
       function selectAllOverall() {
          allUsers.forEach(u => selectedUserIds.add(u.id));
-         renderUserTable(); // refresh checkboxes
+         renderUserTable(); 
       }
 
       function clearSelection() {
@@ -492,7 +538,6 @@
 
       function getSelectedIds() { return Array.from(selectedUserIds); }
 
-      // Custom Delete Modal
       function openDeleteModal() {
         const ids = getSelectedIds();
         if (ids.length === 0) return alert("Please select at least one user first.");
@@ -503,15 +548,14 @@
       async function executeBulkDelete() {
         const ids = getSelectedIds();
         try {
-          const res = await fetch("/api/admin/users/delete", { 
+          const res = await secureFetch("/api/admin/users/delete", { 
             method: "POST", 
             headers: { "Content-Type": "application/json" }, 
             body: JSON.stringify({ userIds: ids }) 
           });
           
-          // NEW: Check if the server actually succeeded before hiding the user!
           if (!res.ok) {
-              alert("The server blocked the deletion. Check your server.js or database.");
+              alert("The server blocked the deletion.");
               return;
           }
 
@@ -529,9 +573,9 @@
         const ids = getSelectedIds();
         if (ids.length === 0) return alert("Select users first.");
         try {
-          await fetch("/api/admin/users/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userIds: ids }) });
-          allUsers.forEach(u => { if (ids.includes(u.id)) u.daily_chat_count = 0; });
-          renderUserTable(); clearSelection(); alert("Daily limits reset to 0.");
+          await secureFetch("/api/admin/users/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userIds: ids }) });
+          allUsers.forEach(u => { if (ids.includes(u.id)) u.burst_count = 0; });
+          renderUserTable(); clearSelection(); alert("Cooldowns reset. Users can chat immediately.");
         } catch(e) { alert("Reset failed"); }
       }
 
@@ -539,7 +583,7 @@
         const ids = getSelectedIds();
         if (ids.length === 0) return alert("Select users first.");
         try {
-          const res = await fetch("/api/admin/users/download", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userIds: ids }) });
+          const res = await secureFetch("/api/admin/users/download", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userIds: ids }) });
           const chats = await res.json();
           
           let fileContent = `=== LIGHT REVEALED CHAT EXPORT ===\nExport Date: ${new Date().toLocaleString()}\n\n`;
