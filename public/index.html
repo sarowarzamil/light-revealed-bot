@@ -255,7 +255,21 @@
         display: flex; align-items: center; gap: 8px; font-size: 13px; 
         color: var(--text-muted); cursor: pointer; white-space: nowrap;
       }
+      /* --- MARKDOWN RICH TEXT STYLING --- */
+      .text-wrapper table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; border-radius: 6px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+      .text-wrapper th, .text-wrapper td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; }
+      .text-wrapper th { background-color: rgba(255, 255, 255, 0.05); font-weight: 600; color: var(--accent); }
+      .text-wrapper tr:nth-child(even) { background-color: rgba(255, 255, 255, 0.02); }
+      .text-wrapper img { max-width: 100%; height: auto; border-radius: 8px; margin: 12px 0; border: 1px solid var(--border); }
+      .text-wrapper pre { background-color: #000; padding: 12px; border-radius: 6px; overflow-x: auto; margin: 12px 0; border: 1px solid var(--border); }
+      .text-wrapper code { font-family: monospace; background-color: rgba(255, 255, 255, 0.1); padding: 2px 4px; border-radius: 4px; font-size: 13px; color: #e2e8f0; }
+      .text-wrapper pre code { background-color: transparent; padding: 0; }
+      .text-wrapper p { margin-bottom: 10px; }
+      .text-wrapper p:last-child { margin-bottom: 0; }
+      .text-wrapper ul, .text-wrapper ol { margin: 10px 0 10px 24px; padding-left: 0; }
+      .text-wrapper blockquote { border-left: 3px solid var(--accent); margin: 12px 0; padding-left: 14px; color: var(--text-muted); font-style: italic; background: rgba(59, 130, 246, 0.05); padding: 10px 14px; border-radius: 0 6px 6px 0; }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   </head>
   <body>
     
@@ -942,7 +956,7 @@ async function handleAuth() {
 
         const isTyping = text === "Thinking..." ? "typing-indicator" : "";
         const isThinkingLogo = text === "Thinking..." ? "thinking-logo" : "";
-        const displayText = isTyping ? "" : text; 
+        const displayText = isTyping ? "" : marked.parse(text);
         const promptToSave = linkedPrompt || lastUserPrompt;
 
         let avatarContent = sender === "user" 
@@ -979,10 +993,13 @@ async function handleAuth() {
         const textActionsBox = row.querySelector('.text-and-actions');
         const words = fullText.split(" ");
         let currentIndex = 0;
+        let accumulatedText = ""; // Tracks the sentence as it builds
 
         const interval = setInterval(() => {
           if (currentIndex < words.length) {
-            textWrapper.innerText += (currentIndex === 0 ? "" : " ") + words[currentIndex];
+            accumulatedText += (currentIndex === 0 ? "" : " ") + words[currentIndex];
+            // Render the growing text as markdown HTML on every tick
+            textWrapper.innerHTML = marked.parse(accumulatedText); 
             chatContainer.scrollTop = chatContainer.scrollHeight;
             currentIndex++;
           } else {
