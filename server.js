@@ -645,7 +645,30 @@ app.post("/chat", authenticateToken, async (req, res) => {
 });
 
 // --- ADMIN API ---
-app.get("/api/settings", async (req, res) => {
+
+// 1. Secure Admin Login Route
+app.post("/api/admin/login", (req, res) => {
+  const { password } = req.body;
+  if (password === process.env.ADMIN_PASSWORD) {
+    const token = jwt.sign({ role: "admin" }, process.env.JWT_SECRET, { expiresIn: '24h' });
+    res.json({ success: true, token });
+  } else {
+    res.status(401).json({ error: "Access Denied" });
+  }
+});
+
+// 2. Admin Security Middleware
+function authenticateAdmin(req, res, next) {
+  const token = req.headers["x-admin-token"];
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err || decoded.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+    next();
+  });
+}
+
+// 3. Protected Admin Routes
+app.get("/api/settings", authenticateAdmin, async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM settings ORDER BY id DESC LIMIT 1");
     res.json({ systemInstruction: result.rows.length > 0 ? result.rows[0].system_instruction : "" });
@@ -654,7 +677,7 @@ app.get("/api/settings", async (req, res) => {
   }
 });
 
-app.post("/api/settings", async (req, res) => {
+app.post("/api/settings", authenticateAdmin, async (req, res) => {
   const { systemInstruction } = req.body;
   try {
     await pool.query(
@@ -667,7 +690,7 @@ app.post("/api/settings", async (req, res) => {
   }
 });
 
-app.post("/api/sync", async (req, res) => {
+app.post("/api/sync", authenticateAdmin, async (req, res) => {
   if (currentSyncStatus.active) {
     return res.status(429).json({ error: "A sync process is already running in the background." });
   }
@@ -680,11 +703,12 @@ app.post("/api/sync", async (req, res) => {
   });
 });
 
-app.get("/api/users", async (req, res) => {
+app.get("/api/users", authenticateAdmin, async (req, res) => {
   try {
+    // UPDATED: Now fetches burst_count instead of daily_chat_count
     const result = await pool.query(`
       SELECT 
-        u.id, u.username, u.daily_chat_count, u.custom_limit,
+        u.id, u.username, u.burst_count, u.custom_limit,
         (SELECT COUNT(*) FROM messages m WHERE m.user_id = u.id AND m.role = 'user') as cc_total,
         (SELECT MAX(created_at) FROM messages m WHERE m.user_id = u.id) as last_active
       FROM users u ORDER BY u.id DESC
@@ -695,7 +719,7 @@ app.get("/api/users", async (req, res) => {
   }
 });
 
-app.post("/api/update-limit", async (req, res) => {
+app.post("/api/update-limit", authenticateAdmin, async (req, res) => {
   const { userId, newLimit } = req.body;
   try {
     await pool.query("UPDATE users SET custom_limit = $1 WHERE id = $2", [newLimit, userId]);
@@ -705,7 +729,7 @@ app.post("/api/update-limit", async (req, res) => {
   }
 });
 
-app.post("/api/admin/users/limit-all", async (req, res) => {
+app.post("/api/admin/users/limit-all", authenticateAdmin, async (req, res) => {
   const { newLimit } = req.body;
   try {
     await pool.query("UPDATE users SET custom_limit = $1", [newLimit]);
@@ -713,7 +737,7 @@ app.post("/api/admin/users/limit-all", async (req, res) => {
   } catch (e) { res.status(500).json({ error: "Update failed" }); }
 });
 
-app.get("/api/admin/stats", async (req, res) => {
+app.get("/api/admin/stats", authenticateAdmin, async (req, res) => {
   try {
     const usersCount = await pool.query("SELECT COUNT(*) FROM users");
     const chunksCount = await pool.query("SELECT COUNT(*) FROM knowledge_chunks");
@@ -732,7 +756,7 @@ app.get("/api/admin/stats", async (req, res) => {
   } catch (e) { res.status(500).json({ error: "Stats error" }); }
 });
 
-app.post("/api/admin/users/delete", async (req, res) => {
+app.post("/api/admin/users/delete", authenticateAdmin, async (req, res) => {
   const { userIds } = req.body;
   try {
     await pool.query("DELETE FROM users WHERE id = ANY($1::int[])", [userIds]);
@@ -740,15 +764,16 @@ app.post("/api/admin/users/delete", async (req, res) => {
   } catch (e) { res.status(500).json({ error: "Delete failed" }); }
 });
 
-app.post("/api/admin/users/reset", async (req, res) => {
+app.post("/api/admin/users/reset", authenticateAdmin, async (req, res) => {
   const { userIds } = req.body;
   try {
-    await pool.query("UPDATE users SET daily_chat_count = 0 WHERE id = ANY($1::int[])", [userIds]);
+    // UPDATED: Resets both burst count and the time lock
+    await pool.query("UPDATE users SET burst_count = 0, last_message_time = NULL WHERE id = ANY($1::int[])", [userIds]);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: "Reset failed" }); }
 });
 
-app.post("/api/admin/users/download", async (req, res) => {
+app.post("/api/admin/users/download", authenticateAdmin, async (req, res) => {
   const { userIds } = req.body;
   try {
     const result = await pool.query(`
