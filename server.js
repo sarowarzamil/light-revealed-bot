@@ -552,12 +552,15 @@ app.post("/chat", authenticateToken, async (req, res) => {
     const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
     
     if (!isGuest) {
-      // Check logged-in user limits
-      const userRes = await pool.query("SELECT burst_count, last_message_time FROM users WHERE id = $1", [req.user.id]);
+      // Check logged-in user limits (NOW FETCHING custom_limit)
+      const userRes = await pool.query("SELECT burst_count, last_message_time, custom_limit FROM users WHERE id = $1", [req.user.id]);
       
       if (userRes.rows.length > 0) {
         const userData = userRes.rows[0];
         const lastMessageTime = userData.last_message_time ? new Date(userData.last_message_time).getTime() : 0;
+        
+        // Use their assigned limit from the admin panel, or default to 5 if blank
+        const allowedBurstLimit = userData.custom_limit || 5; 
         
         let currentBurstCount = userData.burst_count || 0;
 
@@ -566,10 +569,10 @@ app.post("/chat", authenticateToken, async (req, res) => {
           currentBurstCount = 0;
         }
 
-        // If they hit the limit, calculate remaining time and block the message
-        if (currentBurstCount >= 5) {
+        // Check against their dynamic limit, not a hardcoded 5
+        if (currentBurstCount >= allowedBurstLimit) {
           const minutesLeft = Math.ceil((TWO_HOURS_MS - (now - lastMessageTime)) / 60000);
-          return res.json({ reply: `⚠️ You've sent 5 messages. Please wait ${minutesLeft} minutes to catch your breath before chatting again.` });
+          return res.json({ reply: `⚠️ You've sent ${allowedBurstLimit} messages. Please wait ${minutesLeft} minutes to catch your breath before chatting again.` });
         }
 
         // Increment count and update timestamp
