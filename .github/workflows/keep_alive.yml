@@ -2,16 +2,26 @@ name: Keep Supabase Alive
 
 on:
   schedule:
-    # Runs at 00:00 UTC every Tuesday and Friday
-    - cron: '0 0 * * 2,5'
+    # Runs at 00:00 UTC every single day
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 jobs:
   ping-supabase:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Supabase Database
+      - name: Generate Current Time
+        id: time
+        run: echo "CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+
+      - name: Write Ping to Database
         run: |
-          curl -s -X GET "${{ secrets.SUPABASE_URL }}/rest/v1/bookmarks?select=*&limit=1" \
+          curl -s -X POST "${{ secrets.SUPABASE_URL }}/rest/v1/ping_bot" \
             -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}"
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: resolution=merge-duplicates" \
+            -d '{
+              "id": 1,
+              "message": "Engine active. Last pinged on: ${{ env.CURRENT_TIME }}"
+            }'
