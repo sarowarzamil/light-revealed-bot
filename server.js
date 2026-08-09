@@ -499,14 +499,24 @@ app.get("/history/:sessionId", authenticateToken, async (req, res) => {
   }
 });
 
-// --- NEW BOOKMARK ROUTES ---
+// --- OPTIMIZED BOOKMARK ROUTES ---
 app.get("/bookmarks", authenticateToken, async (req, res) => {
   if (!req.user) return res.json({ bookmarks: [] });
   try {
-    const result = await pool.query(
-      "SELECT id, prompt, response FROM bookmarks WHERE user_id = $1 ORDER BY created_at ASC",
-      [req.user.id]
-    );
+    // This clever SQL grabs the bookmarked bot reply AND the user prompt right above it
+    const result = await pool.query(`
+      WITH CTE AS (
+        SELECT id, role, content, is_bookmarked,
+               LAG(content) OVER (PARTITION BY session_id ORDER BY id ASC) as user_prompt
+        FROM messages
+        WHERE user_id = $1
+      )
+      SELECT id, user_prompt as prompt, content as response 
+      FROM CTE 
+      WHERE is_bookmarked = true AND role = 'model'
+      ORDER BY id DESC
+    `, [req.user.id]);
+    
     res.json({ bookmarks: result.rows });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch bookmarks." });
@@ -516,24 +526,26 @@ app.get("/bookmarks", authenticateToken, async (req, res) => {
 app.post("/bookmarks", authenticateToken, async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Unauthorized" });
   
-  const { prompt, response } = req.body;
-  
-  if (!prompt || !response) {
-    return res.status(400).json({ error: "Missing required fields" });
-  }
+  const { response } = req.body;
+  if (!response) return res.status(400).json({ error: "Missing required fields" });
 
   try {
-    const checkRes = await pool.query("SELECT id FROM bookmarks WHERE user_id = $1 AND prompt = $2 AND response = $3", [req.user.id, prompt, response]);
+    // Check if the message is currently bookmarked
+    const checkRes = await pool.query(
+      "SELECT is_bookmarked FROM messages WHERE user_id = $1 AND role = 'model' AND content = $2 LIMIT 1", 
+      [req.user.id, response]
+    );
     
     if (checkRes.rows.length > 0) {
-      await pool.query("DELETE FROM bookmarks WHERE user_id = $1 AND prompt = $2 AND response = $3", [req.user.id, prompt, response]);
-      res.json({ success: true, action: "removed" });
-    } else {
+      const currentState = checkRes.rows[0].is_bookmarked;
+      // Toggle it to the opposite state (true to false, or false to true)
       await pool.query(
-        "INSERT INTO bookmarks (user_id, prompt, response) VALUES ($1, $2, $3)",
-        [req.user.id, prompt, response]
+        "UPDATE messages SET is_bookmarked = $1 WHERE user_id = $2 AND role = 'model' AND content = $3", 
+        [!currentState, req.user.id, response]
       );
-      res.json({ success: true, action: "added" });
+      res.json({ success: true, action: currentState ? "removed" : "added" });
+    } else {
+      res.status(404).json({ error: "Message not found in history." });
     }
   } catch (err) {
     console.error("Bookmark Error:", err);
@@ -625,11 +637,12 @@ app.post("/chat", authenticateToken, async (req, res) => {
       await pool.query("INSERT INTO messages (user_id, session_id, role, content) VALUES ($1, $2, $3, $4)", [req.user.id, sessionId, "user", message]);
       await pool.query("INSERT INTO messages (user_id, session_id, role, content) VALUES ($1, $2, $3, $4)", [req.user.id, sessionId, "model", botReply]);
       
+      // Delete old messages, but NEVER delete ones that are bookmarked
       await pool.query(`
         DELETE FROM messages 
         WHERE id IN (
           SELECT id FROM messages 
-          WHERE user_id = $1 
+          WHERE user_id = $1 AND is_bookmarked = false
           ORDER BY id DESC 
           OFFSET 1000
         )
