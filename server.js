@@ -1,4 +1,10 @@
 require("dotenv").config();
+
+// --- CRITICAL FIX: FORCES DISCORD TO USE IPv4 AND PREVENTS GATEWAY HANGS ---
+const { setDefaultResultOrder } = require('node:dns');
+setDefaultResultOrder('ipv4first');
+// --------------------------------------------------------------------------
+
 const express = require("express");
 const cors = require("cors");
 const path = require('path');
