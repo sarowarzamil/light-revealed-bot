@@ -955,15 +955,6 @@ app.post("/api/discord/worker", async (req, res) => {
 // ==========================================
 // --- DISCORD BOT (NATIVE PERSISTENT CHAT) ---
 // ==========================================
-
-// --- NEW DIAGNOSTIC TRACKER ---
-console.log("🔍 DIAGNOSTIC: Checking for Discord Token...");
-if (!process.env.DISCORD_TOKEN) {
-    console.log("❌ DIAGNOSTIC FAILED: The server sees DISCORD_TOKEN as BLANK or MISSING.");
-} else {
-    console.log(`✅ DIAGNOSTIC PASSED: Token found (Starts with: ${process.env.DISCORD_TOKEN.substring(0, 5)}...)`);
-}
-
 if (process.env.DISCORD_TOKEN) {
   const discordClient = new Client({
     intents: [
@@ -998,20 +989,7 @@ if (process.env.DISCORD_TOKEN) {
           return;
       }
 
-      // --- RESTORED: Context aware Discord chat history ---
-      const fetchedMessages = await message.channel.messages.fetch({ limit: 7 });
-      let currentHistory = [];
-
-      fetchedMessages.reverse().forEach(msg => {
-          if (msg.id === message.id) return; 
-          if (msg.author.id === discordClient.user.id) {
-              currentHistory.push({ role: "model", content: msg.content });
-          } else if (!msg.author.bot) { 
-              currentHistory.push({ role: "user", content: msg.content });
-          }
-      });
-
-      const botReply = await processCoreAIRequestWithRetry(userQuery, currentHistory);
+      const botReply = await processCoreAIRequestWithRetry(userQuery, []);
       const chunks = splitMessage(botReply);
 
       clearInterval(typingInterval);
@@ -1043,7 +1021,7 @@ if (process.env.DISCORD_TOKEN) {
   });
 
   discordClient.login(process.env.DISCORD_TOKEN).catch(err => {
-    console.error("❌ Discord Bot Login Failed:", err.message);
+    console.error("Discord Bot Login Failed:", err.message);
   });
 }
 
