@@ -565,34 +565,41 @@ app.post("/chat", authenticateToken, async (req, res) => {
     const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
     
     if (!isGuest) {
-      // Check logged-in user limits (NOW FETCHING custom_limit)
+      // Check logged-in user limits 
       const userRes = await pool.query("SELECT burst_count, last_message_time, custom_limit FROM users WHERE id = $1", [req.user.id]);
       
       if (userRes.rows.length > 0) {
         const userData = userRes.rows[0];
         const lastMessageTime = userData.last_message_time ? new Date(userData.last_message_time).getTime() : 0;
         
-        // Use their assigned limit from the admin panel, or default to 5 if blank
         const allowedBurstLimit = userData.custom_limit || 5; 
-        
         let currentBurstCount = userData.burst_count || 0;
 
-        // Reset the burst count if 2 hours have passed since their last message
+        // Reset the burst count if 2 hours have passed since the start of their burst
         if (now - lastMessageTime >= TWO_HOURS_MS) {
           currentBurstCount = 0;
         }
 
-        // Check against their dynamic limit, not a hardcoded 5
+        // Check against their dynamic limit
         if (currentBurstCount >= allowedBurstLimit) {
           const minutesLeft = Math.ceil((TWO_HOURS_MS - (now - lastMessageTime)) / 60000);
           return res.json({ reply: `⚠️ You've sent ${allowedBurstLimit} messages. Please wait ${minutesLeft} minutes to catch your breath before chatting again.` });
         }
 
-        // Increment count and update timestamp
-        await pool.query(
-          "UPDATE users SET burst_count = $1, last_message_time = CURRENT_TIMESTAMP WHERE id = $2",
-          [currentBurstCount + 1, req.user.id]
-        );
+        // --- THE CRITICAL FIX ---
+        if (currentBurstCount === 0) {
+          // If this is the FIRST message of a new burst, start the 2-hour clock
+          await pool.query(
+            "UPDATE users SET burst_count = $1, last_message_time = CURRENT_TIMESTAMP WHERE id = $2",
+            [1, req.user.id]
+          );
+        } else {
+          // If they are mid-burst, ONLY increment the count. DO NOT reset the clock!
+          await pool.query(
+            "UPDATE users SET burst_count = $1 WHERE id = $2",
+            [currentBurstCount + 1, req.user.id]
+          );
+        }
       }
     } else {
       // Check guest limits (IP based)
@@ -606,6 +613,7 @@ app.post("/chat", authenticateToken, async (req, res) => {
       // Reset guest count if 2 hours have passed
       if (now - guestData.lastMessageTime >= TWO_HOURS_MS) {
         guestData.count = 0;
+        guestData.lastMessageTime = now; // Start the new 2-hour clock here
       }
 
       if (guestData.count >= 5) {
@@ -614,7 +622,7 @@ app.post("/chat", authenticateToken, async (req, res) => {
       }
 
       guestData.count += 1;
-      guestData.lastMessageTime = now;
+      // Removed the sliding timestamp update from here so the clock keeps ticking down properly
     }
 
     if (!isGuest) {
@@ -637,7 +645,6 @@ app.post("/chat", authenticateToken, async (req, res) => {
       await pool.query("INSERT INTO messages (user_id, session_id, role, content) VALUES ($1, $2, $3, $4)", [req.user.id, sessionId, "user", message]);
       await pool.query("INSERT INTO messages (user_id, session_id, role, content) VALUES ($1, $2, $3, $4)", [req.user.id, sessionId, "model", botReply]);
       
-      // Delete old messages, but NEVER delete ones that are bookmarked
       await pool.query(`
         DELETE FROM messages 
         WHERE id IN (
