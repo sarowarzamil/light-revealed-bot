@@ -10,7 +10,7 @@
     :root {
       --bg-main: #09090b; --bg-card: #18181b; --bg-input: #27272a; 
       --text-main: #fafafa; --text-muted: #a1a1aa; 
-      --user-bubble: #2563eb; --bot-bubble: #27272a; --border: #3f3f46;
+      --user-bubble: #2563eb; --guest-bubble: #f59e0b; --bot-bubble: #27272a; --border: #3f3f46;
     }
     * { box-sizing: border-box; font-family: "Inter", sans-serif; margin: 0; padding: 0; }
     body { background-color: var(--bg-main); color: var(--text-main); height: 100vh; display: flex; flex-direction: column; }
@@ -28,9 +28,17 @@
 
     /* HEADER & FILTERS */
     header { background: var(--bg-card); border-bottom: 1px solid var(--border); padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; gap: 20px; z-index: 10; }
-    .search-container { display: flex; gap: 10px; flex: 1; max-width: 800px; }
+    .search-container { display: flex; gap: 10px; flex: 1; max-width: 600px; }
     .search-container input { flex: 1; padding: 10px 15px; background: var(--bg-input); border: 1px solid var(--border); color: white; border-radius: 20px; outline: none; }
     .search-container input:focus { border-color: #3b82f6; }
+    
+    /* TOGGLE SWITCH */
+    .view-toggle { display: flex; background: var(--bg-input); border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+    .view-toggle button { padding: 8px 18px; border: none; cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.2s; }
+    .view-toggle .active { background: #3b82f6; color: white; }
+    .view-toggle .inactive { background: transparent; color: var(--text-muted); }
+    .view-toggle .inactive:hover { background: rgba(255,255,255,0.05); }
+
     .controls { display: flex; gap: 15px; align-items: center; font-size: 13px; color: var(--text-muted); }
 
     /* CHAT FEED */
@@ -43,7 +51,8 @@
     .msg-id { background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-weight: 600; color: #fff; }
     
     .bubble { padding: 15px 20px; border-radius: 12px; position: relative; line-height: 1.5; font-size: 14px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); word-wrap: break-word; max-width: 90%; }
-    .user .bubble { background: var(--user-bubble); border-bottom-right-radius: 2px; }
+    .users-view .user .bubble { background: var(--user-bubble); border-bottom-right-radius: 2px; }
+    .guests-view .user .bubble { background: var(--guest-bubble); border-bottom-right-radius: 2px; color: #000; font-weight: 500; }
     .model .bubble { background: var(--bot-bubble); border: 1px solid var(--border); border-bottom-left-radius: 2px; }
 
     /* MARKDOWN STYLES IN BUBBLE */
@@ -60,7 +69,7 @@
     @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
-<body>
+<body class="users-view">
 
   <div id="authScreen">
     <div class="auth-box">
@@ -77,16 +86,21 @@
       Light Revealed <span style="color: #3b82f6; font-size: 12px; margin-left: 5px;">LIVE</span>
     </div>
     
+    <div class="view-toggle">
+      <button id="btn-users" class="active" onclick="switchFeed('users')">Users Feed</button>
+      <button id="btn-guests" class="inactive" onclick="switchFeed('guests')">Guests Feed</button>
+    </div>
+
     <div class="search-container">
-      <input type="text" id="searchUser" placeholder="Search by Username..." onkeyup="filterChats()">
+      <input type="text" id="searchUser" placeholder="Search ID or Username..." onkeyup="filterChats()">
       <input type="text" id="searchText" placeholder="Search message content..." onkeyup="filterChats()">
     </div>
 
     <div class="controls">
       <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
-        <input type="checkbox" id="liveToggle" checked onchange="toggleLiveSync()"> Live Auto-Sync
+        <input type="checkbox" id="liveToggle" checked onchange="toggleLiveSync()"> Auto-Sync
       </label>
-      <button onclick="fetchChats(true)" style="background: transparent; border: 1px solid var(--border); color: white; padding: 6px 12px; border-radius: 6px; cursor: pointer;">Force Refresh</button>
+      <button onclick="fetchChats(true)" style="background: transparent; border: 1px solid var(--border); color: white; padding: 6px 12px; border-radius: 6px; cursor: pointer;">Refresh</button>
     </div>
   </header>
 
@@ -102,6 +116,7 @@
     let adminToken = sessionStorage.getItem("monitorToken");
     let allChats = [];
     let syncInterval = null;
+    let currentView = 'users';
 
     // --- AUTHENTICATION ---
     window.onload = () => {
@@ -146,10 +161,27 @@
       toggleLiveSync();
     }
 
+    function switchFeed(type) {
+      if (currentView === type) return;
+      currentView = type;
+      
+      // Update UI Toggle
+      document.getElementById('btn-users').className = type === 'users' ? 'active' : 'inactive';
+      document.getElementById('btn-guests').className = type === 'guests' ? 'active' : 'inactive';
+      
+      // Update Body Class for CSS Styling
+      document.body.className = type === 'users' ? 'users-view' : 'guests-view';
+
+      // Clear Feed & Fetch
+      allChats = []; 
+      document.getElementById("chatFeed").innerHTML = "<div style='text-align:center; color: #a1a1aa; margin-top: 20px;'>Loading feed...</div>";
+      fetchChats(true);
+    }
+
     function toggleLiveSync() {
       const isChecked = document.getElementById("liveToggle").checked;
       if (isChecked) {
-        syncInterval = setInterval(() => fetchChats(false), 10000); // Polls every 10 seconds
+        syncInterval = setInterval(() => fetchChats(false), 10000); 
       } else {
         clearInterval(syncInterval);
       }
@@ -157,7 +189,9 @@
 
     async function fetchChats(scrollToBottom = false) {
       try {
-        const res = await fetch(`${RENDER_URL}/api/admin/live-chats`, {
+        const endpoint = currentView === 'users' ? '/api/admin/live-chats' : '/api/admin/live-guest-chats';
+        
+        const res = await fetch(`${RENDER_URL}${endpoint}`, {
           headers: { "x-admin-token": adminToken }
         });
         
@@ -169,7 +203,6 @@
 
         const newData = await res.json();
         
-        // Only re-render if there are new messages to save browser memory
         if (newData.length !== allChats.length) {
             allChats = newData;
             filterChats(scrollToBottom);
@@ -187,7 +220,10 @@
       feed.innerHTML = "";
 
       const filtered = allChats.filter(c => {
-        const matchUser = c.username.toLowerCase().includes(searchUser);
+        // Fallback for guests who don't have usernames
+        const userNameStr = c.username ? c.username.toLowerCase() : (`Guest_${c.session_id.substring(0,6)}`).toLowerCase();
+        
+        const matchUser = userNameStr.includes(searchUser);
         const matchText = c.content.toLowerCase().includes(searchText);
         return matchUser && matchText;
       });
@@ -196,7 +232,9 @@
         const date = new Date(c.created_at).toLocaleString();
         const isUser = c.role === 'user';
         
-        // Use the absolute database ID for persistent numbering
+        // Define Display Name
+        const displayName = c.username || `Guest_${c.session_id.substring(0,6)}`;
+        
         const rawContent = c.content.replace(/"/g, '&quot;').replace(/'/g, "\\'");
         
         const wrapper = document.createElement("div");
@@ -205,7 +243,7 @@
         wrapper.innerHTML = `
           <div class="meta">
             ${isUser ? `<span class="msg-id">#${c.id}</span>` : ''}
-            <span>${isUser ? `<strong>${c.username}</strong>` : 'Light Revealed'}</span>
+            <span>${isUser ? `<strong>${displayName}</strong>` : 'Light Revealed'}</span>
             <span>•</span>
             <span>${date}</span>
             ${!isUser ? `<span class="msg-id">#${c.id}</span>` : ''}
@@ -220,7 +258,6 @@
         feed.appendChild(wrapper);
       });
 
-      // Scroll to bottom if this is a fresh load or manual refresh
       if (forceScroll || (searchUser === "" && searchText === "")) {
           feed.scrollTop = feed.scrollHeight;
       }
@@ -229,7 +266,6 @@
     function copyText(btnElement, text) {
       navigator.clipboard.writeText(text).then(() => {
         const originalIcon = btnElement.innerHTML;
-        // Show checkmark on success
         btnElement.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
         setTimeout(() => { btnElement.innerHTML = originalIcon; }, 2000);
       });
