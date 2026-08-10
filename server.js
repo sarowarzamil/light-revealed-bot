@@ -726,32 +726,49 @@ app.get("/api/settings", authenticateAdmin, async (req, res) => {
     res.status(500).json({ error: "Failed to load settings" });
   }
 });
-// 4. Live Chat Feed Route for Vercel App
+// 4. Live Chat Feed Route for Vercel App (PAGINATED & NATIVE SEARCH)
 app.get("/api/admin/live-chats", authenticateAdmin, async (req, res) => {
   try {
-    // Fetches all registered user chats, attaches their username, and sorts chronologically
-    const result = await pool.query(`
-      SELECT m.id, m.role, m.content, m.created_at, m.session_id, u.username 
-      FROM messages m 
-      JOIN users u ON m.user_id = u.id 
-      ORDER BY m.id ASC
-    `);
-    res.json(result.rows);
+    const { before_id, search_user, search_text } = req.query;
+    let query = `SELECT m.id, m.role, m.content, m.created_at, m.session_id, u.username FROM messages m JOIN users u ON m.user_id = u.id`;
+    const params = [];
+    let conditions = [];
+
+    if (before_id) { conditions.push(`m.id < $${params.length + 1}`); params.push(before_id); }
+    if (search_user) { conditions.push(`u.username ILIKE $${params.length + 1}`); params.push(`%${search_user}%`); }
+    if (search_text) { conditions.push(`m.content ILIKE $${params.length + 1}`); params.push(`%${search_text}%`); }
+
+    if (conditions.length > 0) { query += ` WHERE ` + conditions.join(' AND '); }
+    
+    // Always grab the latest 20 matches, then reverse them so they read chronologically
+    query += ` ORDER BY m.id DESC LIMIT 20`;
+
+    const result = await pool.query(query, params);
+    res.json(result.rows.reverse());
   } catch (e) {
     res.status(500).json({ error: "Failed to load live chats" });
   }
 });
 
-// 5. Live Guest Chat Feed Route for Vercel App
+// 5. Live Guest Chat Feed Route (PAGINATED & NATIVE SEARCH)
 app.get("/api/admin/live-guest-chats", authenticateAdmin, async (req, res) => {
   try {
-    // Fetches guest chats (which don't have a username, only a session_id)
-    const result = await pool.query(`
-      SELECT id, role, content, created_at, session_id 
-      FROM guest_messages 
-      ORDER BY id ASC
-    `);
-    res.json(result.rows);
+    const { before_id, search_user, search_text } = req.query;
+    let query = `SELECT id, role, content, created_at, session_id FROM guest_messages`;
+    const params = [];
+    let conditions = [];
+
+    if (before_id) { conditions.push(`id < $${params.length + 1}`); params.push(before_id); }
+    // Maps the 'Username' search to the Guest's Session ID
+    if (search_user) { conditions.push(`session_id ILIKE $${params.length + 1}`); params.push(`%${search_user}%`); }
+    if (search_text) { conditions.push(`content ILIKE $${params.length + 1}`); params.push(`%${search_text}%`); }
+
+    if (conditions.length > 0) { query += ` WHERE ` + conditions.join(' AND '); }
+
+    query += ` ORDER BY id DESC LIMIT 20`;
+
+    const result = await pool.query(query, params);
+    res.json(result.rows.reverse());
   } catch (e) {
     res.status(500).json({ error: "Failed to load live guest chats" });
   }
