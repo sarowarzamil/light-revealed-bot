@@ -8,6 +8,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <style>
       :root {
         --bg-main: #09090b; --bg-sidebar: #121214; --bg-card: #18181b; --bg-input: #27272a; 
@@ -197,7 +198,7 @@
            <button class="btn-secondary" style="padding: 6px 12px; font-size: 12px; margin-right: auto;" onclick="clearSelection()">Clear</button>
 
            <button class="btn-secondary" onclick="bulkResetLimits()">Reset Daily Limit</button>
-           <button class="btn-secondary" onclick="bulkDownloadChats()">Download Chats</button>
+           <button class="btn-secondary" onclick="openDownloadModal('user')">Download Chats</button>
            <button class="btn-danger" onclick="openDeleteModal()">Delete User(s)</button>
         </div>
 
@@ -234,10 +235,10 @@
         </div>
         
         <div style="text-align: center; margin-bottom: 30px;">
-          <button class="btn-secondary" onclick="downloadGuestChats()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 5px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-            Download Public Guest Logs
-          </button>
+          <button class="btn-secondary" onclick="openDownloadModal('guest')">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 5px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+  Download Public Guest Logs
+</button>
         </div>
         <div class="card">
           <h3 style="font-size: 16px; margin-bottom: 8px;">Supabase Free Tier Capacity</h3>
@@ -257,6 +258,45 @@
       </div>
 
     </main>
+
+    <div id="downloadModal" class="modal-overlay custom-modal">
+      <div class="modal-box">
+        <h2 style="margin-bottom: 15px;">Advanced Export Options</h2>
+        
+        <div style="margin-bottom: 20px;">
+          <label style="color: var(--text-muted); font-size: 13px; font-weight: 600; display: block; margin-bottom: 8px;">EXPORT RANGE</label>
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer;">
+             <input type="radio" name="dlRange" value="all" checked onchange="toggleRange(false)" style="width: 16px; height: 16px; accent-color: var(--accent-blue);"> 
+             Download All Available Messages
+          </label>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+             <input type="radio" name="dlRange" value="custom" onchange="toggleRange(true)" style="width: 16px; height: 16px; accent-color: var(--accent-blue);"> 
+             Custom Message Range
+          </label>
+          
+          <div id="rangeInputs" style="display: none; gap: 10px; margin-top: 10px;">
+             <input type="number" id="rangeFrom" placeholder="Start Msg (e.g. 1)" min="1">
+             <input type="number" id="rangeTo" placeholder="End Msg (e.g. 500)">
+          </div>
+        </div>
+
+        <div style="margin-bottom: 25px;">
+          <label style="color: var(--text-muted); font-size: 13px; font-weight: 600; display: block; margin-bottom: 8px;">FILE FORMAT</label>
+          <select id="dlFormat">
+            <option value="doc">Microsoft Word Document (.doc)</option>
+            <option value="pdf">PDF Document (.pdf)</option>
+            <option value="html">Web Page Document (.html)</option>
+            <option value="txt">Plain Text File (.txt)</option>
+          </select>
+          <p style="font-size: 11px; color: var(--text-muted); margin-top: 8px;">*Large exports will be automatically chunked into 100-message files and bundled in a ZIP archive.</p>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 10px;">
+          <button class="btn-secondary" onclick="closeModal('downloadModal')">Cancel</button>
+          <button class="btn-primary" id="startDlBtn" onclick="executeDownload()">Build & Download</button>
+        </div>
+      </div>
+    </div>
 
    <script>
       let adminToken = sessionStorage.getItem("adminToken");
@@ -590,121 +630,135 @@
         } catch(e) { alert("Reset failed"); }
       }
 
-      async function bulkDownloadChats() {
-        const ids = getSelectedIds();
-        if (ids.length === 0) return alert("Select users first.");
-        try {
-          const res = await secureFetch("/api/admin/users/download", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userIds: ids }) });
-          const chats = await res.json();
-          
-          let docHTML = `
-            <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-            <head>
-              <meta charset='utf-8'>
-              <style>
-                body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; }
-                table { border-collapse: collapse; width: 100%; margin: 15px 0; }
-                th, td { border: 1px solid #aaaaaa; padding: 10px; text-align: left; }
-                th { background-color: #f3f4f6; font-weight: bold; }
-                .msg-header { border-bottom: 2px solid #3b82f6; padding-bottom: 5px; margin-top: 30px; font-weight: bold; font-size: 14px; }
-                .role-user { color: #2563eb; }
-                .role-model { color: #10b981; }
-              </style>
-            </head>
-            <body>
-              <h2>Light Revealed - Registered User Logs</h2>
-              <p><strong>Export Date:</strong> ${new Date().toLocaleString()}</p>
-              <hr>
-          `;
+      // --- THE MASTER EXPORT ENGINE ---
+      let currentDownloadType = ''; 
 
-          chats.forEach(c => {
-             const dateStr = new Date(c.created_at).toLocaleString();
-             const roleColor = c.role === 'user' ? 'role-user' : 'role-model';
-             const formattedContent = marked.parse(c.content); 
-
-             docHTML += `
-               <div class="msg-header ${roleColor}">[${dateStr}] ${c.username} - ${c.role.toUpperCase()}</div>
-               <div>${formattedContent}</div>
-             `;
-          });
-
-          docHTML += `</body></html>`;
-
-          const blob = new Blob([docHTML], { type: "application/msword" });
-          const link = document.createElement("a");
-          link.href = URL.createObjectURL(blob);
-          link.download = `User_Logs_${Date.now()}.doc`;
-          link.click();
-          clearSelection();
-        } catch(e) { alert("Download failed"); }
+      function openDownloadModal(type) {
+        if (type === 'user' && getSelectedIds().length === 0) {
+          return alert("Please select at least one user from the table first.");
+        }
+        currentDownloadType = type;
+        document.getElementById('downloadModal').classList.add('show');
       }
-     async function downloadGuestChats() {
-        try {
-          const res = await secureFetch("/api/admin/guests/download", { method: "POST" });
-          const chats = await res.json();
-          
-          if (chats.length === 0) return alert("No guest messages logged yet.");
-          
-          alert(`Packaging ${chats.length} messages into chunks of 100. This will download a single ZIP archive containing the separate Word Documents.`);
 
+      function toggleRange(show) {
+        document.getElementById('rangeInputs').style.display = show ? 'flex' : 'none';
+      }
+
+      async function executeDownload() {
+        const format = document.getElementById('dlFormat').value;
+        const isCustom = document.querySelector('input[name="dlRange"]:checked').value === 'custom';
+        const fromIdx = parseInt(document.getElementById('rangeFrom').value) || 1;
+        const toIdx = parseInt(document.getElementById('rangeTo').value) || 5000;
+        const btn = document.getElementById('startDlBtn');
+
+        btn.innerText = "Querying Database...";
+        btn.disabled = true;
+
+        try {
+          // 1. Fetch the requested data
+          let chats = [];
+          if (currentDownloadType === 'guest') {
+            const res = await secureFetch("/api/admin/guests/download", { method: "POST" });
+            chats = await res.json();
+          } else {
+            const res = await secureFetch("/api/admin/users/download", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userIds: getSelectedIds() }) });
+            chats = await res.json();
+          }
+
+          if (chats.length === 0) return alert("No messages found to download.");
+
+          // 2. Apply Custom Range filter
+          if (isCustom) {
+             const start = Math.max(0, fromIdx - 1);
+             const end = Math.min(chats.length, toIdx);
+             chats = chats.slice(start, end);
+          }
+
+          if (chats.length === 0) return alert("No messages found in that specific range.");
+
+          // 3. Initialize the ZIP builder
           const zip = new JSZip();
           const chunkSize = 100;
           let fileCount = 1;
+          const totalChunks = Math.ceil(chats.length / chunkSize);
 
-          // Loop through all chats in chunks of 100
+          // 4. Chunk & Format
           for (let i = 0; i < chats.length; i += chunkSize) {
+            btn.innerText = `Building File ${fileCount} of ${totalChunks}...`;
             const chunk = chats.slice(i, i + chunkSize);
             
-            // Build the Word HTML structure for this specific chunk
-            let docHTML = `
-              <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-              <head>
-                <meta charset='utf-8'>
-                <style>
-                  body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; }
-                  table { border-collapse: collapse; width: 100%; margin: 15px 0; }
-                  th, td { border: 1px solid #aaaaaa; padding: 10px; text-align: left; }
-                  th { background-color: #f3f4f6; font-weight: bold; }
-                  .msg-header { border-bottom: 2px solid #3b82f6; padding-bottom: 5px; margin-top: 30px; font-weight: bold; font-size: 14px; }
-                  .role-user { color: #2563eb; }
-                  .role-model { color: #10b981; }
-                </style>
-              </head>
-              <body>
-                <h2>Light Revealed - Public Guest Logs (Part ${fileCount})</h2>
-                <p><strong>Export Date:</strong> ${new Date().toLocaleString()}</p>
-                <p><strong>Messages:</strong> ${i + 1} to ${Math.min(i + chunkSize, chats.length)}</p>
-                <hr>
-            `;
-
-            chunk.forEach(c => {
-               const dateStr = new Date(c.created_at).toLocaleString();
-               const sessionShort = c.session_id ? c.session_id.substring(0, 8) : "Unknown";
-               const roleColor = c.role === 'user' ? 'role-user' : 'role-model';
-               const formattedContent = marked.parse(c.content); 
-
-               docHTML += `
-                 <div class="msg-header ${roleColor}">[${dateStr}] [Session: ${sessionShort}] - ${c.role.toUpperCase()}</div>
-                 <div>${formattedContent}</div>
+            if (format === 'txt') {
+               let txtContent = `=== LIGHT REVEALED LOGS (Part ${fileCount}) ===\n\n`;
+               chunk.forEach(c => {
+                  const identifier = c.username || `Session: ${c.session_id.substring(0,8)}`;
+                  txtContent += `[${new Date(c.created_at).toLocaleString()}] ${identifier} (${c.role.toUpperCase()}):\n${c.content}\n\n`;
+               });
+               zip.file(`Logs_Part_${fileCount}.txt`, txtContent);
+            } 
+            else {
+               // Base HTML for DOC, HTML, and PDF
+               let htmlBody = `
+                <html ${format === 'doc' ? "xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word'" : ""}>
+                <head>
+                  <meta charset='utf-8'>
+                  <style>
+                    body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; }
+                    table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+                    th, td { border: 1px solid #aaaaaa; padding: 10px; text-align: left; }
+                    th { background-color: #f3f4f6; font-weight: bold; }
+                    .msg-header { border-bottom: 2px solid #3b82f6; padding-bottom: 5px; margin-top: 30px; font-weight: bold; font-size: 14px; }
+                    .role-user { color: #2563eb; }
+                    .role-model { color: #10b981; }
+                  </style>
+                </head>
+                <body>
+                  <h2>Light Revealed Logs (Part ${fileCount})</h2>
                `;
-            });
+               
+               chunk.forEach(c => {
+                   const identifier = c.username || `Session: ${c.session_id.substring(0,8)}`;
+                   const roleColor = c.role === 'user' ? 'role-user' : 'role-model';
+                   htmlBody += `<div class="msg-header ${roleColor}">[${new Date(c.created_at).toLocaleString()}] ${identifier} - ${c.role.toUpperCase()}</div>`;
+                   htmlBody += `<div>${marked.parse(c.content)}</div>`;
+               });
+               htmlBody += `</body></html>`;
 
-            docHTML += `</body></html>`;
-            
-            // Add this newly created Word Document into our ZIP folder
-            zip.file(`Guest_Logs_Part_${fileCount}.doc`, docHTML);
+               if (format === 'doc' || format === 'html') {
+                   zip.file(`Logs_Part_${fileCount}.${format}`, htmlBody);
+               } 
+               else if (format === 'pdf') {
+                   const tempDiv = document.createElement('div');
+                   tempDiv.innerHTML = htmlBody;
+                   const opt = {
+                      margin: 0.5, filename: 'temp.pdf', image: { type: 'jpeg', quality: 0.98 },
+                      html2canvas: { scale: 2 }, jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
+                   };
+                   // Force JS to wait for the PDF to finish generating before moving to the next chunk
+                   const pdfBlob = await html2pdf().set(opt).from(tempDiv).output('blob');
+                   zip.file(`Logs_Part_${fileCount}.pdf`, pdfBlob);
+               }
+            }
             fileCount++;
           }
 
-          // Generate the final ZIP file and trigger the browser download
-          zip.generateAsync({ type: "blob" }).then(function(content) {
-            const link = document.createElement("a");
-            link.href = URL.createObjectURL(content);
-            link.download = `Guest_Logs_Archive_${Date.now()}.zip`;
-            link.click();
-          });
-
-        } catch(e) { alert("Download failed. Your connection may have timed out."); }
+          // 5. Compress and Download
+          btn.innerText = "Compressing ZIP...";
+          const zipBlob = await zip.generateAsync({ type: "blob" });
+          const link = document.createElement("a");
+          link.href = URL.createObjectURL(zipBlob);
+          link.download = `Light_Revealed_Archive_${Date.now()}.zip`;
+          link.click();
+          
+          closeModal('downloadModal');
+          if (currentDownloadType === 'user') clearSelection();
+          
+        } catch (err) {
+          alert("Error generating download. If using PDF, the browser may have timed out.");
+        } finally {
+          btn.innerText = "Build & Download";
+          btn.disabled = false;
+        }
       }
     </script>
   </body>
