@@ -677,7 +677,7 @@
 
           if (chats.length === 0) return alert("No messages found in that specific range.");
 
-          // 3. Initialize the ZIP builder
+          // 3. Initialize builders
           const zip = new JSZip();
           const chunkSize = 100;
           let fileCount = 1;
@@ -689,66 +689,91 @@
             const chunk = chats.slice(i, i + chunkSize);
             
             if (format === 'txt') {
-               let txtContent = `=== LIGHT REVEALED LOGS (Part ${fileCount}) ===\n\n`;
+               let txtContent = `=== LIGHT REVEALED LOGS${totalChunks > 1 ? ` (Part ${fileCount})` : ''} ===\n\n`;
                chunk.forEach(c => {
                   const identifier = c.username || `Session: ${c.session_id.substring(0,8)}`;
                   txtContent += `[${new Date(c.created_at).toLocaleString()}] ${identifier} (${c.role.toUpperCase()}):\n${c.content}\n\n`;
                });
-               zip.file(`Logs_Part_${fileCount}.txt`, txtContent);
+               
+               if (totalChunks === 1) {
+                   const blob = new Blob([txtContent], { type: "text/plain" });
+                   const link = document.createElement("a");
+                   link.href = URL.createObjectURL(blob);
+                   link.download = `Light_Revealed_Logs_${Date.now()}.txt`;
+                   link.click();
+               } else {
+                   zip.file(`Logs_Part_${fileCount}.txt`, txtContent);
+               }
             } 
             else {
-               // Base HTML for DOC, HTML, and PDF
+               // Hardcoded high-contrast styles specifically for readability in exports
                let htmlBody = `
                 <html ${format === 'doc' ? "xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word'" : ""}>
                 <head>
                   <meta charset='utf-8'>
                   <style>
-                    body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; }
-                    table { border-collapse: collapse; width: 100%; margin: 15px 0; }
-                    th, td { border: 1px solid #aaaaaa; padding: 10px; text-align: left; }
-                    th { background-color: #f3f4f6; font-weight: bold; }
-                    .msg-header { border-bottom: 2px solid #3b82f6; padding-bottom: 5px; margin-top: 30px; font-weight: bold; font-size: 14px; }
-                    .role-user { color: #2563eb; }
-                    .role-model { color: #10b981; }
+                    body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #000000; background-color: #ffffff; margin: 0; padding: 20px; }
+                    table { border-collapse: collapse; width: 100%; margin: 15px 0; background-color: #ffffff; color: #000000; }
+                    th, td { border: 1px solid #000000; padding: 10px; text-align: left; }
+                    th { background-color: #e5e7eb; font-weight: bold; color: #000000; }
+                    .msg-header { border-bottom: 2px solid #000000; padding-bottom: 5px; margin-top: 30px; font-weight: bold; font-size: 14px; color: #000000; }
                   </style>
                 </head>
                 <body>
-                  <h2>Light Revealed Logs (Part ${fileCount})</h2>
+                  <h2>Light Revealed Logs${totalChunks > 1 ? ` (Part ${fileCount})` : ''}</h2>
                `;
                
                chunk.forEach(c => {
                    const identifier = c.username || `Session: ${c.session_id.substring(0,8)}`;
-                   const roleColor = c.role === 'user' ? 'role-user' : 'role-model';
-                   htmlBody += `<div class="msg-header ${roleColor}">[${new Date(c.created_at).toLocaleString()}] ${identifier} - ${c.role.toUpperCase()}</div>`;
+                   htmlBody += `<div class="msg-header">[${new Date(c.created_at).toLocaleString()}] ${identifier} - ${c.role.toUpperCase()}</div>`;
                    htmlBody += `<div>${marked.parse(c.content)}</div>`;
                });
                htmlBody += `</body></html>`;
 
                if (format === 'doc' || format === 'html') {
-                   zip.file(`Logs_Part_${fileCount}.${format}`, htmlBody);
+                   if (totalChunks === 1) {
+                       const mime = format === 'doc' ? "application/msword" : "text/html";
+                       const blob = new Blob([htmlBody], { type: mime });
+                       const link = document.createElement("a");
+                       link.href = URL.createObjectURL(blob);
+                       link.download = `Light_Revealed_Logs_${Date.now()}.${format}`;
+                       link.click();
+                   } else {
+                       zip.file(`Logs_Part_${fileCount}.${format}`, htmlBody);
+                   }
                } 
                else if (format === 'pdf') {
                    const tempDiv = document.createElement('div');
                    tempDiv.innerHTML = htmlBody;
                    const opt = {
                       margin: 0.5, filename: 'temp.pdf', image: { type: 'jpeg', quality: 0.98 },
-                      html2canvas: { scale: 2 }, jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
+                      html2canvas: { scale: 2, backgroundColor: '#ffffff' }, jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
                    };
-                   // Force JS to wait for the PDF to finish generating before moving to the next chunk
+                   
                    const pdfBlob = await html2pdf().set(opt).from(tempDiv).output('blob');
-                   zip.file(`Logs_Part_${fileCount}.pdf`, pdfBlob);
+                   
+                   if (totalChunks === 1) {
+                       const link = document.createElement("a");
+                       link.href = URL.createObjectURL(pdfBlob);
+                       link.download = `Light_Revealed_Logs_${Date.now()}.pdf`;
+                       link.click();
+                   } else {
+                       zip.file(`Logs_Part_${fileCount}.pdf`, pdfBlob);
+                   }
                }
             }
             fileCount++;
           }
 
-          // 5. Compress and Download
-          btn.innerText = "Compressing ZIP...";
-          const zipBlob = await zip.generateAsync({ type: "blob" });
-          const link = document.createElement("a");
-          link.href = URL.createObjectURL(zipBlob);
-          link.download = `Light_Revealed_Archive_${Date.now()}.zip`;
-          link.click();
+          // 5. Compress and Download ONLY if there are multiple chunks
+          if (totalChunks > 1) {
+              btn.innerText = "Compressing ZIP...";
+              const zipBlob = await zip.generateAsync({ type: "blob" });
+              const link = document.createElement("a");
+              link.href = URL.createObjectURL(zipBlob);
+              link.download = `Light_Revealed_Archive_${Date.now()}.zip`;
+              link.click();
+          }
           
           closeModal('downloadModal');
           if (currentDownloadType === 'user') clearSelection();
