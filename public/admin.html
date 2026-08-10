@@ -6,6 +6,7 @@
     <title>Light Revealed - Admin Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
       :root {
         --bg-main: #09090b; --bg-sidebar: #121214; --bg-card: #18181b; --bg-input: #27272a; 
@@ -595,16 +596,43 @@
           const res = await secureFetch("/api/admin/users/download", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userIds: ids }) });
           const chats = await res.json();
           
-          let fileContent = `=== LIGHT REVEALED CHAT EXPORT ===\nExport Date: ${new Date().toLocaleString()}\n\n`;
+          let docHTML = `
+            <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+            <head>
+              <meta charset='utf-8'>
+              <style>
+                body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; }
+                table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+                th, td { border: 1px solid #aaaaaa; padding: 10px; text-align: left; }
+                th { background-color: #f3f4f6; font-weight: bold; }
+                .msg-header { border-bottom: 2px solid #3b82f6; padding-bottom: 5px; margin-top: 30px; font-weight: bold; font-size: 14px; }
+                .role-user { color: #2563eb; }
+                .role-model { color: #10b981; }
+              </style>
+            </head>
+            <body>
+              <h2>Light Revealed - Registered User Logs</h2>
+              <p><strong>Export Date:</strong> ${new Date().toLocaleString()}</p>
+              <hr>
+          `;
+
           chats.forEach(c => {
              const dateStr = new Date(c.created_at).toLocaleString();
-             fileContent += `[${dateStr}] ${c.username} (${c.role.toUpperCase()}):\n${c.content}\n\n`;
+             const roleColor = c.role === 'user' ? 'role-user' : 'role-model';
+             const formattedContent = marked.parse(c.content); 
+
+             docHTML += `
+               <div class="msg-header ${roleColor}">[${dateStr}] ${c.username} - ${c.role.toUpperCase()}</div>
+               <div>${formattedContent}</div>
+             `;
           });
 
-          const blob = new Blob([fileContent], { type: "text/plain" });
+          docHTML += `</body></html>`;
+
+          const blob = new Blob([docHTML], { type: "application/msword" });
           const link = document.createElement("a");
           link.href = URL.createObjectURL(blob);
-          link.download = `chat_export_${Date.now()}.txt`;
+          link.download = `User_Logs_${Date.now()}.doc`;
           link.click();
           clearSelection();
         } catch(e) { alert("Download failed"); }
@@ -616,18 +644,49 @@
           
           if (chats.length === 0) return alert("No guest messages logged yet.");
           
-          let fileContent = `=== LIGHT REVEALED PUBLIC GUEST LOGS ===\nExport Date: ${new Date().toLocaleString()}\n\n`;
+          // Create the Microsoft Word HTML skeleton with table styling
+          let docHTML = `
+            <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+            <head>
+              <meta charset='utf-8'>
+              <style>
+                body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; }
+                table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+                th, td { border: 1px solid #aaaaaa; padding: 10px; text-align: left; }
+                th { background-color: #f3f4f6; font-weight: bold; }
+                .msg-header { border-bottom: 2px solid #3b82f6; padding-bottom: 5px; margin-top: 30px; font-weight: bold; font-size: 14px; }
+                .role-user { color: #2563eb; }
+                .role-model { color: #10b981; }
+              </style>
+            </head>
+            <body>
+              <h2>Light Revealed - Public Guest Logs</h2>
+              <p><strong>Export Date:</strong> ${new Date().toLocaleString()}</p>
+              <hr>
+          `;
+
+          // Parse each chat into formatted HTML
           chats.forEach(c => {
              const dateStr = new Date(c.created_at).toLocaleString();
-             // Mask the session ID slightly for readability
              const sessionShort = c.session_id ? c.session_id.substring(0, 8) : "Unknown";
-             fileContent += `[${dateStr}] [Session: ${sessionShort}] (${c.role.toUpperCase()}):\n${c.content}\n\n`;
+             const roleColor = c.role === 'user' ? 'role-user' : 'role-model';
+             
+             // marked.parse() safely turns the AI's markdown tables into real tables
+             const formattedContent = marked.parse(c.content); 
+
+             docHTML += `
+               <div class="msg-header ${roleColor}">[${dateStr}] [Session: ${sessionShort}] - ${c.role.toUpperCase()}</div>
+               <div>${formattedContent}</div>
+             `;
           });
 
-          const blob = new Blob([fileContent], { type: "text/plain" });
+          docHTML += `</body></html>`;
+
+          // Download as a Microsoft Word Document
+          const blob = new Blob([docHTML], { type: "application/msword" });
           const link = document.createElement("a");
           link.href = URL.createObjectURL(blob);
-          link.download = `guest_logs_${Date.now()}.txt`;
+          link.download = `Guest_Logs_${Date.now()}.doc`;
           link.click();
         } catch(e) { alert("Download failed"); }
       }
