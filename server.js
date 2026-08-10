@@ -742,6 +742,21 @@ app.get("/api/admin/live-chats", authenticateAdmin, async (req, res) => {
   }
 });
 
+// 5. Live Guest Chat Feed Route for Vercel App
+app.get("/api/admin/live-guest-chats", authenticateAdmin, async (req, res) => {
+  try {
+    // Fetches guest chats (which don't have a username, only a session_id)
+    const result = await pool.query(`
+      SELECT id, role, content, created_at, session_id 
+      FROM guest_messages 
+      ORDER BY id ASC
+    `);
+    res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: "Failed to load live guest chats" });
+  }
+});
+
 app.post("/api/settings", authenticateAdmin, async (req, res) => {
   const { systemInstruction } = req.body;
   try {
