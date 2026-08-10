@@ -226,10 +226,17 @@
 
         <div class="stats-grid">
           <div class="stat-box"><div class="num" id="stat-users">0</div><div class="label">Registered Users</div></div>
-          <div class="stat-box"><div class="num" id="stat-msgs">0</div><div class="label">Total Messages</div></div>
+          <div class="stat-box"><div class="num" id="stat-msgs">0</div><div class="label">User Chats</div></div>
+          <div class="stat-box"><div class="num" id="stat-guests">0</div><div class="label">Guest Chats</div></div>
           <div class="stat-box"><div class="num" id="stat-chunks">0</div><div class="label">Knowledge Vectors</div></div>
         </div>
-
+        
+        <div style="text-align: center; margin-bottom: 30px;">
+          <button class="btn-secondary" onclick="downloadGuestChats()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 5px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Download Public Guest Logs
+          </button>
+        </div>
         <div class="card">
           <h3 style="font-size: 16px; margin-bottom: 8px;">Supabase Free Tier Capacity</h3>
           <div style="display: flex; justify-content: space-between; font-size: 13px; color: var(--text-muted); margin-bottom: 5px;">
@@ -327,6 +334,7 @@
           document.getElementById("kbChunkCount").innerText = `Total Synced Chunks: ${data.chunks}`;
           document.getElementById("stat-users").innerText = data.users;
           document.getElementById("stat-msgs").innerText = data.messages;
+          document.getElementById("stat-guests").innerText = data.guestMessages || 0; // NEW: Displays guest count
           document.getElementById("stat-chunks").innerText = data.chunks;
 
           const usedMB = data.dbSizeMB || 0;
@@ -338,20 +346,21 @@
           progressBar.style.width = `${percentage}%`;
           if (percentage > 85) progressBar.style.background = "var(--accent-red)";
 
-          renderChart(data.users, data.messages, data.chunks);
+          // Passes the 4th parameter to the chart
+          renderChart(data.users, data.messages, data.chunks, data.guestMessages || 0); 
         } catch(e) { console.log("Stats error"); }
       }
 
-      function renderChart(u, m, c) {
+      function renderChart(u, m, c, g) {
         const ctx = document.getElementById('dbChart').getContext('2d');
         if(dbChartInstance) dbChartInstance.destroy();
         dbChartInstance = new Chart(ctx, {
             type: 'doughnut',
             data: {
-                labels: ['Users Data', 'Chat History', 'Knowledge Vectors'],
+                labels: ['Users Data', 'User Chats', 'Knowledge Vectors', 'Guest Chats'],
                 datasets: [{
-                    data: [u, m, c],
-                    backgroundColor: ['#ef4444', '#3b82f6', '#10b981'],
+                    data: [u, m, c, g],
+                    backgroundColor: ['#ef4444', '#3b82f6', '#10b981', '#f59e0b'], // Added amber color for guests
                     borderWidth: 0, hoverOffset: 4
                 }]
             },
@@ -598,6 +607,28 @@
           link.download = `chat_export_${Date.now()}.txt`;
           link.click();
           clearSelection();
+        } catch(e) { alert("Download failed"); }
+      }
+     async function downloadGuestChats() {
+        try {
+          const res = await secureFetch("/api/admin/guests/download", { method: "POST" });
+          const chats = await res.json();
+          
+          if (chats.length === 0) return alert("No guest messages logged yet.");
+          
+          let fileContent = `=== LIGHT REVEALED PUBLIC GUEST LOGS ===\nExport Date: ${new Date().toLocaleString()}\n\n`;
+          chats.forEach(c => {
+             const dateStr = new Date(c.created_at).toLocaleString();
+             // Mask the session ID slightly for readability
+             const sessionShort = c.session_id ? c.session_id.substring(0, 8) : "Unknown";
+             fileContent += `[${dateStr}] [Session: ${sessionShort}] (${c.role.toUpperCase()}):\n${c.content}\n\n`;
+          });
+
+          const blob = new Blob([fileContent], { type: "text/plain" });
+          const link = document.createElement("a");
+          link.href = URL.createObjectURL(blob);
+          link.download = `guest_logs_${Date.now()}.txt`;
+          link.click();
         } catch(e) { alert("Download failed"); }
       }
     </script>
