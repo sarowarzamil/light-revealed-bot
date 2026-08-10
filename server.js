@@ -659,6 +659,26 @@ app.post("/chat", authenticateToken, async (req, res) => {
       currentHistory.push({ role: "model", content: botReply });
       if (currentHistory.length > 6) currentHistory = currentHistory.slice(-6);
       guestMemoryMap.set(sessionId, currentHistory);
+
+      // --- NEW: Save strictly to the isolated guest_messages table ---
+      await pool.query(
+        "INSERT INTO guest_messages (session_id, role, content) VALUES ($1, $2, $3)", 
+        [sessionId, "user", message]
+      );
+      await pool.query(
+        "INSERT INTO guest_messages (session_id, role, content) VALUES ($1, $2, $3)", 
+        [sessionId, "model", botReply]
+      );
+
+      // --- NEW: The 1000-message vacuum for guests ---
+      await pool.query(`
+        DELETE FROM guest_messages 
+        WHERE id IN (
+          SELECT id FROM guest_messages 
+          ORDER BY id DESC 
+          OFFSET 1000
+        )
+      `);
     }
 
     res.json({ reply: botReply });
@@ -767,6 +787,9 @@ app.get("/api/admin/stats", authenticateAdmin, async (req, res) => {
     const chunksCount = await pool.query("SELECT COUNT(*) FROM knowledge_chunks");
     const msgsCount = await pool.query("SELECT COUNT(*) FROM messages");
     
+    // NEW: Count the isolated guest messages
+    const guestMsgsCount = await pool.query("SELECT COUNT(*) FROM guest_messages"); 
+    
     const dbSizeRes = await pool.query("SELECT pg_database_size(current_database()) as bytes");
     const bytes = parseInt(dbSizeRes.rows[0].bytes);
     const mbSize = (bytes / (1024 * 1024)).toFixed(2);
@@ -775,6 +798,7 @@ app.get("/api/admin/stats", authenticateAdmin, async (req, res) => {
         users: parseInt(usersCount.rows[0].count),
         chunks: parseInt(chunksCount.rows[0].count),
         messages: parseInt(msgsCount.rows[0].count),
+        guestMessages: parseInt(guestMsgsCount.rows[0].count), // Sent to frontend
         dbSizeMB: parseFloat(mbSize)
     });
   } catch (e) { res.status(500).json({ error: "Stats error" }); }
@@ -807,6 +831,19 @@ app.post("/api/admin/users/download", authenticateAdmin, async (req, res) => {
     `, [userIds]);
     res.json(result.rows);
   } catch (e) { res.status(500).json({ error: "Download failed" }); }
+});
+app.post("/api/admin/guests/download", authenticateAdmin, async (req, res) => {
+  try {
+    // Fetches all available guest messages (up to the 1000 limit)
+    const result = await pool.query(`
+      SELECT session_id, role, content, created_at 
+      FROM guest_messages 
+      ORDER BY id ASC
+    `);
+    res.json(result.rows);
+  } catch (e) { 
+    res.status(500).json({ error: "Guest download failed" }); 
+  }
 });
 
 // ==========================================
