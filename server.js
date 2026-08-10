@@ -670,13 +670,13 @@ app.post("/chat", authenticateToken, async (req, res) => {
         [sessionId, "model", botReply]
       );
 
-      // --- NEW: The 1000-message vacuum for guests ---
+// The 5000-message vacuum for guests
       await pool.query(`
         DELETE FROM guest_messages 
         WHERE id IN (
           SELECT id FROM guest_messages 
           ORDER BY id DESC 
-          OFFSET 1000
+          OFFSET 5000
         )
       `);
     }
