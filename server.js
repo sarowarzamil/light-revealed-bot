@@ -602,27 +602,33 @@ app.post("/chat", authenticateToken, async (req, res) => {
         }
       }
     } else {
-      // Check guest limits (IP based)
-      const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+      // --- GUEST LOGIC ---
+      
+      // 1. Safely extract the exact client IP behind Render's proxy network
+      let ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+      if (ip.includes(',')) {
+        ip = ip.split(',')[0].trim();
+      }
       
       if (!guestRateLimitMap.has(ip)) {
         guestRateLimitMap.set(ip, { count: 0, lastMessageTime: 0 });
       }
       const guestData = guestRateLimitMap.get(ip);
       
-      // Reset guest count if 2 hours have passed
+      // 2. Reset guest count ONLY if 2 hours have passed since their FIRST message
       if (now - guestData.lastMessageTime >= TWO_HOURS_MS) {
         guestData.count = 0;
-        guestData.lastMessageTime = now; // Start the new 2-hour clock here
+        guestData.lastMessageTime = now; // Lock in the start time of the new burst
       }
 
+      // 3. Block if they hit the limit
       if (guestData.count >= 5) {
         const minutesLeft = Math.ceil((TWO_HOURS_MS - (now - guestData.lastMessageTime)) / 60000);
         return res.json({ reply: `⚠️ Guest limit reached. Please wait ${minutesLeft} minutes or Sign Up to continue.` });
       }
 
+      // 4. Increment the count (We DO NOT update the timestamp here anymore)
       guestData.count += 1;
-      // Removed the sliding timestamp update from here so the clock keeps ticking down properly
     }
 
     if (!isGuest) {
