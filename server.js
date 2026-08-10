@@ -726,6 +726,21 @@ app.get("/api/settings", authenticateAdmin, async (req, res) => {
     res.status(500).json({ error: "Failed to load settings" });
   }
 });
+// 4. Live Chat Feed Route for Vercel App
+app.get("/api/admin/live-chats", authenticateAdmin, async (req, res) => {
+  try {
+    // Fetches all registered user chats, attaches their username, and sorts chronologically
+    const result = await pool.query(`
+      SELECT m.id, m.role, m.content, m.created_at, m.session_id, u.username 
+      FROM messages m 
+      JOIN users u ON m.user_id = u.id 
+      ORDER BY m.id ASC
+    `);
+    res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: "Failed to load live chats" });
+  }
+});
 
 app.post("/api/settings", authenticateAdmin, async (req, res) => {
   const { systemInstruction } = req.body;
