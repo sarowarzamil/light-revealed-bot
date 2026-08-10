@@ -7,6 +7,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
       :root {
         --bg-main: #09090b; --bg-sidebar: #121214; --bg-card: #18181b; --bg-input: #27272a; 
@@ -644,51 +645,66 @@
           
           if (chats.length === 0) return alert("No guest messages logged yet.");
           
-          // Create the Microsoft Word HTML skeleton with table styling
-          let docHTML = `
-            <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-            <head>
-              <meta charset='utf-8'>
-              <style>
-                body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; }
-                table { border-collapse: collapse; width: 100%; margin: 15px 0; }
-                th, td { border: 1px solid #aaaaaa; padding: 10px; text-align: left; }
-                th { background-color: #f3f4f6; font-weight: bold; }
-                .msg-header { border-bottom: 2px solid #3b82f6; padding-bottom: 5px; margin-top: 30px; font-weight: bold; font-size: 14px; }
-                .role-user { color: #2563eb; }
-                .role-model { color: #10b981; }
-              </style>
-            </head>
-            <body>
-              <h2>Light Revealed - Public Guest Logs</h2>
-              <p><strong>Export Date:</strong> ${new Date().toLocaleString()}</p>
-              <hr>
-          `;
+          alert(`Packaging ${chats.length} messages into chunks of 100. This will download a single ZIP archive containing the separate Word Documents.`);
 
-          // Parse each chat into formatted HTML
-          chats.forEach(c => {
-             const dateStr = new Date(c.created_at).toLocaleString();
-             const sessionShort = c.session_id ? c.session_id.substring(0, 8) : "Unknown";
-             const roleColor = c.role === 'user' ? 'role-user' : 'role-model';
-             
-             // marked.parse() safely turns the AI's markdown tables into real tables
-             const formattedContent = marked.parse(c.content); 
+          const zip = new JSZip();
+          const chunkSize = 100;
+          let fileCount = 1;
 
-             docHTML += `
-               <div class="msg-header ${roleColor}">[${dateStr}] [Session: ${sessionShort}] - ${c.role.toUpperCase()}</div>
-               <div>${formattedContent}</div>
-             `;
+          // Loop through all chats in chunks of 100
+          for (let i = 0; i < chats.length; i += chunkSize) {
+            const chunk = chats.slice(i, i + chunkSize);
+            
+            // Build the Word HTML structure for this specific chunk
+            let docHTML = `
+              <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+              <head>
+                <meta charset='utf-8'>
+                <style>
+                  body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; }
+                  table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+                  th, td { border: 1px solid #aaaaaa; padding: 10px; text-align: left; }
+                  th { background-color: #f3f4f6; font-weight: bold; }
+                  .msg-header { border-bottom: 2px solid #3b82f6; padding-bottom: 5px; margin-top: 30px; font-weight: bold; font-size: 14px; }
+                  .role-user { color: #2563eb; }
+                  .role-model { color: #10b981; }
+                </style>
+              </head>
+              <body>
+                <h2>Light Revealed - Public Guest Logs (Part ${fileCount})</h2>
+                <p><strong>Export Date:</strong> ${new Date().toLocaleString()}</p>
+                <p><strong>Messages:</strong> ${i + 1} to ${Math.min(i + chunkSize, chats.length)}</p>
+                <hr>
+            `;
+
+            chunk.forEach(c => {
+               const dateStr = new Date(c.created_at).toLocaleString();
+               const sessionShort = c.session_id ? c.session_id.substring(0, 8) : "Unknown";
+               const roleColor = c.role === 'user' ? 'role-user' : 'role-model';
+               const formattedContent = marked.parse(c.content); 
+
+               docHTML += `
+                 <div class="msg-header ${roleColor}">[${dateStr}] [Session: ${sessionShort}] - ${c.role.toUpperCase()}</div>
+                 <div>${formattedContent}</div>
+               `;
+            });
+
+            docHTML += `</body></html>`;
+            
+            // Add this newly created Word Document into our ZIP folder
+            zip.file(`Guest_Logs_Part_${fileCount}.doc`, docHTML);
+            fileCount++;
+          }
+
+          // Generate the final ZIP file and trigger the browser download
+          zip.generateAsync({ type: "blob" }).then(function(content) {
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(content);
+            link.download = `Guest_Logs_Archive_${Date.now()}.zip`;
+            link.click();
           });
 
-          docHTML += `</body></html>`;
-
-          // Download as a Microsoft Word Document
-          const blob = new Blob([docHTML], { type: "application/msword" });
-          const link = document.createElement("a");
-          link.href = URL.createObjectURL(blob);
-          link.download = `Guest_Logs_${Date.now()}.doc`;
-          link.click();
-        } catch(e) { alert("Download failed"); }
+        } catch(e) { alert("Download failed. Your connection may have timed out."); }
       }
     </script>
   </body>
