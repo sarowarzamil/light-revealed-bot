@@ -706,17 +706,17 @@
                }
             } 
             else {
-               // Hardcoded high-contrast styles specifically for readability in exports
+               // Clean, minimal, original styling. Includes page-break rules to prevent broken tables.
                let htmlBody = `
                 <html ${format === 'doc' ? "xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word'" : ""}>
                 <head>
                   <meta charset='utf-8'>
                   <style>
-                    body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #000000; background-color: #ffffff; margin: 0; padding: 20px; }
-                    table { border-collapse: collapse; width: 100%; margin: 15px 0; background-color: #ffffff; color: #000000; }
-                    th, td { border: 1px solid #000000; padding: 10px; text-align: left; }
-                    th { background-color: #e5e7eb; font-weight: bold; color: #000000; }
-                    .msg-header { border-bottom: 2px solid #000000; padding-bottom: 5px; margin-top: 30px; font-weight: bold; font-size: 14px; color: #000000; }
+                    body { font-family: sans-serif; line-height: 1.5; color: #000; background: #fff; margin: 0; padding: 10px; }
+                    table { border-collapse: collapse; width: 100%; margin: 15px 0; page-break-inside: auto; }
+                    tr { page-break-inside: avoid; page-break-after: auto; }
+                    th, td { border: 1px solid #000; padding: 8px; text-align: left; }
+                    .msg-header { margin-top: 25px; padding-bottom: 5px; border-bottom: 1px solid #ccc; font-weight: bold; }
                   </style>
                 </head>
                 <body>
@@ -745,9 +745,13 @@
                else if (format === 'pdf') {
                    const tempDiv = document.createElement('div');
                    tempDiv.innerHTML = htmlBody;
+                   
+                   // Drastically reduced scale and stripped heavy JPEG settings for maximum speed
                    const opt = {
-                      margin: 0.5, filename: 'temp.pdf', image: { type: 'jpeg', quality: 0.98 },
-                      html2canvas: { scale: 2, backgroundColor: '#ffffff' }, jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
+                      margin: 0.5, 
+                      filename: 'temp.pdf', 
+                      html2canvas: { scale: 1 }, 
+                      jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
                    };
                    
                    const pdfBlob = await html2pdf().set(opt).from(tempDiv).output('blob');
