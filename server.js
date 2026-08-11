@@ -565,36 +565,36 @@ app.post("/chat", authenticateToken, async (req, res) => {
     const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
     
     if (!isGuest) {
-      // Check logged-in user limits 
+      // --- LOGGED-IN USER LOGIC ---
       const userRes = await pool.query("SELECT burst_count, last_message_time, custom_limit FROM users WHERE id = $1", [req.user.id]);
       
       if (userRes.rows.length > 0) {
         const userData = userRes.rows[0];
         const lastMessageTime = userData.last_message_time ? new Date(userData.last_message_time).getTime() : 0;
         
-        const allowedBurstLimit = userData.custom_limit || 5; 
+        // UPGRADE: Default limit increased to 15 for registered users
+        const allowedBurstLimit = userData.custom_limit || 15; 
         let currentBurstCount = userData.burst_count || 0;
 
-        // Reset the burst count if 2 hours have passed since the start of their burst
         if (now - lastMessageTime >= TWO_HOURS_MS) {
           currentBurstCount = 0;
         }
 
-        // Check against their dynamic limit
         if (currentBurstCount >= allowedBurstLimit) {
           const minutesLeft = Math.ceil((TWO_HOURS_MS - (now - lastMessageTime)) / 60000);
-          return res.json({ reply: `⚠️ You've sent ${allowedBurstLimit} messages. Please wait ${minutesLeft} minutes to catch your breath before chatting again.` });
+          
+          // Dual-language message (NO account creation prompt)
+          const limitMsg = `⚠️ You've sent ${allowedBurstLimit} messages. Please wait ${minutesLeft} minutes to catch your breath before chatting again.\n\n⚠️ আপনি ${allowedBurstLimit} টি মেসেজ পাঠিয়েছেন। অনুগ্রহ করে আবার চ্যাট করার আগে ${minutesLeft} মিনিট অপেক্ষা করুন।`;
+          
+          return res.json({ reply: limitMsg });
         }
 
-        // --- THE CRITICAL FIX ---
         if (currentBurstCount === 0) {
-          // If this is the FIRST message of a new burst, start the 2-hour clock
           await pool.query(
             "UPDATE users SET burst_count = $1, last_message_time = CURRENT_TIMESTAMP WHERE id = $2",
             [1, req.user.id]
           );
         } else {
-          // If they are mid-burst, ONLY increment the count. DO NOT reset the clock!
           await pool.query(
             "UPDATE users SET burst_count = $1 WHERE id = $2",
             [currentBurstCount + 1, req.user.id]
@@ -603,31 +603,34 @@ app.post("/chat", authenticateToken, async (req, res) => {
       }
     } else {
       // --- GUEST LOGIC ---
-      
-      // 1. Safely extract the exact client IP behind Render's proxy network
       let ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
-      if (ip.includes(',')) {
-        ip = ip.split(',')[0].trim();
-      }
+      if (ip.includes(',')) ip = ip.split(',')[0].trim(); // Safely handle Render proxies
       
       if (!guestRateLimitMap.has(ip)) {
         guestRateLimitMap.set(ip, { count: 0, lastMessageTime: 0 });
       }
       const guestData = guestRateLimitMap.get(ip);
       
-      // 2. Reset guest count ONLY if 2 hours have passed since their FIRST message
       if (now - guestData.lastMessageTime >= TWO_HOURS_MS) {
         guestData.count = 0;
-        guestData.lastMessageTime = now; // Lock in the start time of the new burst
+        guestData.lastMessageTime = now; 
       }
 
-      // 3. Block if they hit the limit
+      // Hard limit of 5 for Guests
       if (guestData.count >= 5) {
         const minutesLeft = Math.ceil((TWO_HOURS_MS - (now - guestData.lastMessageTime)) / 60000);
-        return res.json({ reply: `⚠️ Guest limit reached. Please wait ${minutesLeft} minutes or Sign Up to continue.` });
+        
+        // Dual-language message WITH account creation prompt
+        const limitMsg = `⚠️ You've sent 5 messages. Please wait ${minutesLeft} minutes to catch your breath before chatting again. Or 'Create an Account' to get extended chat limits.\n\n⚠️ আপনি ৫টি মেসেজ পাঠিয়েছেন। অনুগ্রহ করে আবার চ্যাট করার আগে ${minutesLeft} মিনিট অপেক্ষা করুন। অথবা বর্ধিত চ্যাট লিমিট পেতে 'অ্যাকাউন্ট তৈরি করুন'।`;
+        
+        // We pass 'showGuestModal: true' so the frontend knows to open the popup
+        return res.json({ 
+          reply: limitMsg, 
+          showGuestModal: true,
+          minutesWait: minutesLeft
+        });
       }
 
-      // 4. Increment the count (We DO NOT update the timestamp here anymore)
       guestData.count += 1;
     }
 
