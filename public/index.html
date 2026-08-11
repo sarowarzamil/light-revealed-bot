@@ -372,6 +372,31 @@
       </div>
     </div>
 
+    <div class="modal-overlay" id="guestLimitModal">
+      <div class="modal-content" style="text-align: center;">
+        <button class="modal-close" onclick="closeGuestModal()">&times;</button>
+        
+        <div style="background: rgba(239, 68, 68, 0.1); width: 60px; height: 60px; border-radius: 50%; display: flex; justify-content: center; align-items: center; margin: 0 auto 20px auto;">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+        </div>
+        
+        <h2 style="margin-bottom: 15px; font-size: 20px;">গেস্ট চ্যাট লিমিট শেষ</h2>
+        
+        <p style="color: var(--text-muted); font-size: 14px; line-height: 1.5; margin-bottom: 10px;">
+          আপনি ৫টি মেসেজ পাঠিয়েছেন। অনুগ্রহ করে আবার চ্যাট করার আগে <span id="modalMinutes" style="color: var(--accent); font-weight: bold;"></span> মিনিট অপেক্ষা করুন।
+        </p>
+        <p style="color: var(--text-muted); font-size: 14px; line-height: 1.5; margin-bottom: 25px;">
+          অথবা বর্ধিত চ্যাট লিমিট পেতে <strong style="color: white;">'অ্যাকাউন্ট তৈরি করুন'</strong>।
+        </p>
+
+        <div style="display: flex; gap: 10px; justify-content: center;">
+          <button class="modal-btn" style="background: transparent; border: 1px solid var(--border); color: var(--text-main);" onclick="closeGuestModal()">বন্ধ করুন</button>
+          
+          <button class="modal-btn" onclick="closeGuestModal(); openAuthModal(); changeAuthMode('signup');">অ্যাকাউন্ট তৈরি করুন</button>
+        </div>
+      </div>
+    </div>
+
     <script>
       const chatContainer = document.getElementById("chat-container");
       const inputField = document.getElementById("userInput");
@@ -522,6 +547,7 @@
         document.getElementById("bookmarksModal").style.display = "flex"; 
       }
       function closeBookmarksModal() { document.getElementById("bookmarksModal").style.display = "none"; }
+      function closeGuestModal() { document.getElementById("guestLimitModal").style.display = "none"; }
       
       let currentAuthMode = 'login'; 
       let recoveryEmail = '';
@@ -957,6 +983,14 @@ async function handleAuth() {
           });
           const data = await res.json();
           document.getElementById(typingId).remove();
+          
+          // --- NEW: Check for guest limit modal trigger ---
+          if (data.showGuestModal) {
+             document.getElementById('modalMinutes').innerText = data.minutesWait;
+             document.getElementById('guestLimitModal').style.display = 'flex';
+          }
+          // ------------------------------------------------
+          
           animateBotReply(data.reply);
           if (token && document.querySelectorAll(".history-item").length === 0) fetchSidebarSessions();
         } catch (error) {
