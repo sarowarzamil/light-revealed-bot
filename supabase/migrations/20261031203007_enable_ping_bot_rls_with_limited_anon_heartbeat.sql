@@ -10,8 +10,7 @@ REVOKE ALL PRIVILEGES ON TABLE public.ping_bot FROM authenticated;
 GRANT SELECT (id, message), INSERT (id, message), UPDATE (id, message)
 ON TABLE public.ping_bot TO anon;
 
--- Explicit grant for the server-side role, required for new Data API exposure rules
--- when this role is used by the scheduled workflow.
+-- Explicit grant for the server-side role, required for new Data API exposure rules.
 GRANT ALL PRIVILEGES ON TABLE public.ping_bot TO service_role;
 
 DROP POLICY IF EXISTS ping_bot_anon_read_heartbeat ON public.ping_bot;
@@ -30,7 +29,7 @@ FOR INSERT
 TO anon
 WITH CHECK (
   id = 1
-  AND message ~ '^Engine active\\. Last pinged on: [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$'
+  AND message ~ '^Engine active\. Last pinged on: [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$'
 );
 
 CREATE POLICY ping_bot_anon_update_heartbeat
@@ -40,5 +39,5 @@ TO anon
 USING (id = 1)
 WITH CHECK (
   id = 1
-  AND message ~ '^Engine active\\. Last pinged on: [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$'
+  AND message ~ '^Engine active\. Last pinged on: [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$'
 );
