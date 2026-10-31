@@ -283,8 +283,8 @@
           <div class="user-stats-header" id="totalUserCountUI">Total Users: 0</div>
           
           <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
-            <input type="text" id="userSearchInput" placeholder="Search username..." onkeyup="renderUserTable()" style="width: 180px; margin-bottom: 0;">
-            <select id="sortSelect" onchange="renderUserTable()" style="width: 150px; margin-bottom: 0;">
+            <input type="text" id="userSearchInput" placeholder="Search username..." oninput="resetUserPageAndRender()" style="width: 180px; margin-bottom: 0;">
+            <select id="sortSelect" onchange="resetUserPageAndRender()" style="width: 150px; margin-bottom: 0;">
               <option value="name">Name (A-Z)</option>
               <option value="cctotal">CC Total</option>
               <option value="lastactive" selected>Last Active</option>
@@ -548,6 +548,10 @@
         renderUserTable();
       }
       function toggleSortOrder() { sortAscending = !sortAscending; renderUserTable(); }
+      function resetUserPageAndRender() {
+        currentPage = 1;
+        renderUserTable();
+      }
       function renderUserTable() {
         const query = document.getElementById("userSearchInput").value.toLowerCase();
         const sortKey = document.getElementById("sortSelect").value;
@@ -557,6 +561,8 @@
             let valB = sortKey==='name'?b.username.toLowerCase(): sortKey==='cctotal'?parseInt(b.cc_total||0): new Date(b.last_active||0).getTime();
             return (valA < valB ? -1 : 1) * (sortAscending ? 1 : -1);
         });
+        const totalPages = Math.max(1, Math.ceil(filtered.length / usersPerPage));
+        currentPage = Math.min(Math.max(currentPage, 1), totalPages);
         const start = (currentPage - 1) * usersPerPage;
         document.getElementById("userTableBody").innerHTML = filtered.slice(start, start + usersPerPage).map(u => `
           <tr>
@@ -571,11 +577,14 @@
               </div>
             </td>
           </tr>`).join('');
-        document.getElementById("pageInfo").innerText = `Page ${currentPage} of ${Math.ceil(filtered.length/usersPerPage)||1}`;
-        document.getElementById("prevBtn").disabled = currentPage === 1;
-        document.getElementById("nextBtn").disabled = currentPage === Math.ceil(filtered.length/usersPerPage)||1;
+        document.getElementById("pageInfo").innerText = `Page ${currentPage} of ${totalPages}`;
+        document.getElementById("prevBtn").disabled = currentPage <= 1;
+        document.getElementById("nextBtn").disabled = currentPage >= totalPages;
       }
-      function changePage(dir) { currentPage += dir; renderUserTable(); }
+      function changePage(dir) {
+        currentPage += Number(dir);
+        renderUserTable();
+      }
       async function updateLimit(userId) {
         const newLimit = document.getElementById(`limit-${userId}`).value;
         await secureFetch("/api/update-limit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId, newLimit }) });
