@@ -15,13 +15,14 @@ jobs:
         run: echo "CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
 
       - name: Write Ping to Database
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          CURRENT_TIME: ${{ env.CURRENT_TIME }}
         run: |
-          curl -s -X POST "${{ secrets.SUPABASE_URL }}/rest/v1/ping_bot" \
-            -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
+          curl --fail-with-body --silent --show-error --connect-timeout 10 --max-time 30 -X POST "$SUPABASE_URL/rest/v1/ping_bot" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
             -H "Content-Type: application/json" \
             -H "Prefer: resolution=merge-duplicates" \
-            -d '{
-              "id": 1,
-              "message": "Engine active. Last pinged on: ${{ env.CURRENT_TIME }}"
-            }'
+            --data-raw "{\"id\":1,\"message\":\"Engine active. Last pinged on: $CURRENT_TIME\"}"
