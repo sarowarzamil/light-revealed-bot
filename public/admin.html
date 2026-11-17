@@ -614,7 +614,767 @@
       }
 
       // --- DOWNLOAD EXPORT ENGINE ---
-      let currentDownloadType = ''; 
+      let currentDownloadType = '';
+      let cachedLogoDataUri = null;
+
+      async function getLogoBase64() {
+        if (cachedLogoDataUri) return cachedLogoDataUri;
+        try {
+          const res = await fetch('/logo.png');
+          if (!res.ok) throw new Error('Logo fetch failed');
+          const blob = await res.blob();
+          return await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              cachedLogoDataUri = reader.result;
+              resolve(cachedLogoDataUri);
+            };
+            reader.readAsDataURL(blob);
+          });
+        } catch (e) {
+          return '';
+        }
+      }
+
+      function buildRichChatbotHTML(chats, logoDataUri, exportLabel = "Chat Export") {
+        // Group messages into logical sessions & pre-render markdown so the file works 100% offline
+        const preparedMessages = [];
+        let autoSessionCounter = 1;
+        let lastUser = null;
+        let lastTime = 0;
+        let lastPromptText = "";
+
+        chats.forEach((c, idx) => {
+          const role = (c.role === 'user') ? 'user' : 'bot';
+          const username = c.username || (c.session_id ? `Guest_${String(c.session_id).substring(0, 6)}` : 'Guest');
+          const ts = c.created_at ? new Date(c.created_at).getTime() : 0;
+          const timeStr = c.created_at ? new Date(c.created_at).toLocaleString() : `Message #${idx + 1}`;
+
+          // Determine session key (uses DB session_id if present, otherwise groups by user + 30-min inactivity gap)
+          let sessionKey = c.session_id ? `${username}::${c.session_id}` : null;
+          if (!sessionKey) {
+            if (lastUser !== username || (ts && lastTime && (ts - lastTime > 30 * 60 * 1000) && role === 'user')) {
+              if (lastUser !== null) autoSessionCounter++;
+            }
+            sessionKey = `${username}::session_${autoSessionCounter}`;
+          }
+          lastUser = username;
+          if (ts) lastTime = ts;
+
+          const rawContent = String(c.content || '');
+          if (role === 'user') lastPromptText = rawContent;
+
+          let renderedHtml = '';
+          try {
+            renderedHtml = marked.parse(rawContent, { breaks: true });
+          } catch (err) {
+            renderedHtml = rawContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+          }
+
+          preparedMessages.push({
+            idx: idx + 1,
+            id: c.id || (idx + 1),
+            role,
+            username,
+            sessionKey,
+            timeStr,
+            raw: rawContent,
+            html: renderedHtml,
+            prompt: role === 'bot' ? lastPromptText : rawContent,
+            isBookmarked: Boolean(c.is_bookmarked)
+          });
+        });
+
+        const safeJson = JSON.stringify({
+          exportLabel,
+          exportedAt: new Date().toLocaleString(),
+          logoDataUri: logoDataUri || '',
+          messages: preparedMessages
+        }).replace(/</g, '\\u003c');
+
+        return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Light Revealed Chatbot - ${exportLabel}</title>
+    ${logoDataUri ? `<link rel="icon" type="image/png" href="${logoDataUri}" />` : ''}
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --bg-sidebar: #0a0912;
+        --bg-main: #0e0e16;
+        --bg-input: #1a1923;
+        --text-main: #ececec;
+        --text-muted: #9ca3af;
+        --accent: #3b82f6;
+        --border: #2a2a35;
+        --hover-bg: rgba(255, 255, 255, 0.05);
+      }
+
+      * { box-sizing: border-box; font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 0; }
+      body { display: flex; height: 100dvh; background-color: var(--bg-main); color: var(--text-main); overflow: hidden; }
+
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+
+      /* --- SIDEBAR (Exact Chatbot Interface) --- */
+      .sidebar {
+        width: 350px;
+        background-color: var(--bg-sidebar);
+        display: flex;
+        flex-direction: column;
+        border-right: 1px solid var(--border);
+        padding: 15px;
+        z-index: 1000;
+        flex-shrink: 0;
+      }
+
+      .close-sidebar-btn { display: none; background: none; border: none; color: var(--text-muted); font-size: 20px; cursor: pointer; align-self: flex-end; margin-bottom: 12px; }
+
+      .new-chat-btn {
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 100%);
+        color: var(--text-main); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px;
+        padding: 12px; font-size: 14px; font-weight: 500; cursor: pointer; text-align: left;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      }
+      .new-chat-btn:hover { border-color: rgba(255, 255, 255, 0.2); transform: translateY(-1px); background: rgba(255, 255, 255, 0.08); }
+      .new-chat-btn.active { border-color: var(--accent); background: rgba(59, 130, 246, 0.12); }
+      .count-pill { background: rgba(59, 130, 246, 0.18); color: var(--accent); padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+
+      .user-filter-box { margin-bottom: 10px; display: none; }
+      .user-filter-box select {
+        width: 100%; background-color: var(--bg-input); color: var(--text-main);
+        border: 1px solid var(--border); border-radius: 6px; padding: 9px 12px; font-size: 13px; outline: none; cursor: pointer;
+      }
+      .user-filter-box select:focus { border-color: var(--accent); }
+
+      .search-container { margin-bottom: 12px; position: relative; }
+      .search-container input {
+        width: 100%; background-color: var(--bg-input); color: var(--text-main);
+        border: 1px solid var(--border); border-radius: 6px; padding: 10px 30px 10px 12px; font-size: 13px; outline: none; transition: border-color 0.2s;
+      }
+      .search-container input:focus { border-color: var(--accent); }
+      .clear-search-btn { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; display: none; }
+
+      .nav-mode-tabs { display: flex; gap: 6px; margin-bottom: 10px; background: var(--bg-input); padding: 4px; border-radius: 8px; border: 1px solid var(--border); }
+      .nav-mode-btn { flex: 1; background: transparent; border: none; color: var(--text-muted); padding: 6px 8px; border-radius: 5px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+      .nav-mode-btn.active { background: var(--accent); color: #fff; }
+
+      .sidebar-sections { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+      .history-section { flex: 2; display: flex; flex-direction: column; overflow: hidden; }
+      .section-label { font-size: 12px; color: var(--text-muted); font-weight: 600; margin-bottom: 8px; padding-left: 5px; text-transform: uppercase; letter-spacing: 0.5px; display: flex; justify-content: space-between; align-items: center; }
+      .history-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding-right: 5px; }
+
+      /* Bengali text clipping fix matching index.html */
+      .history-item {
+        padding: 8px 10px 10px 10px;
+        font-size: 13.5px;
+        color: var(--text-main);
+        border-radius: 6px;
+        cursor: pointer;
+        line-height: 1.4;
+        transition: background-color 0.2s;
+        border-left: 3px solid transparent;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        flex-shrink: 0;
+      }
+      .history-item-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-bottom: 2px; }
+      .history-item-meta { font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; align-items: center; }
+      .history-item:hover { background-color: var(--hover-bg); }
+      .history-item.active { background-color: var(--bg-input); border-left-color: var(--accent); border-radius: 4px 6px 6px 4px; }
+
+      .bookmarks-section { flex: 1; display: flex; flex-direction: column; border-top: 1px solid var(--border); padding-top: 12px; margin-top: 10px; overflow: hidden; min-height: 130px; }
+      .bookmarks-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+      .bookmark-item {
+        padding: 6px 10px;
+        font-size: 13px;
+        color: var(--text-main);
+        border-radius: 6px;
+        cursor: pointer;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        line-height: 1.4;
+        flex-shrink: 0;
+      }
+      .bookmark-item:hover { background-color: var(--hover-bg); }
+      .show-all-btn { width: 100%; padding: 8px; font-size: 12px; color: var(--accent); background: transparent; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+      .show-all-btn:hover { background: rgba(59, 130, 246, 0.1); border-color: var(--accent); }
+
+      .profile-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+      .profile-info { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 500; min-width: 0; }
+      .profile-avatar { width: 32px; height: 32px; background-color: #5436da; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #fff; flex-shrink: 0; }
+      .profile-meta { display: flex; flex-direction: column; min-width: 0; }
+      .profile-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13.5px; font-weight: 600; }
+      .profile-sub { font-size: 11px; color: var(--text-muted); }
+
+      /* --- MAIN CHAT AREA (Exact Chatbot Interface) --- */
+      .main-content { flex: 1; display: flex; flex-direction: column; position: relative; min-width: 0; }
+      .header {
+        padding: 13px 20px; font-weight: 600; color: var(--text-muted); border-bottom: 1px solid var(--border);
+        display: flex; justify-content: space-between; align-items: center; position: relative; z-index: 10; background: var(--bg-main); gap: 12px;
+      }
+      .header-center { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .header-title { color: var(--text-main); font-size: 15px; font-weight: 600; }
+      .header-badge { background: rgba(59, 130, 246, 0.12); color: var(--accent); border: 1px solid rgba(59, 130, 246, 0.25); padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+      .header-actions { display: flex; align-items: center; gap: 6px; }
+      .header-btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text-muted); padding: 6px 10px; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; transition: all 0.2s; }
+      .header-btn:hover { color: var(--text-main); border-color: rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.06); }
+
+      .chat-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+      .chat-container { flex: 1; overflow-y: auto; padding: 20px 0 40px; display: flex; flex-direction: column; scroll-behavior: smooth; }
+
+      .message-row { padding: 24px 20px; display: flex; justify-content: center; border-bottom: 1px solid rgba(255, 255, 255, 0.02); transition: background-color 0.3s ease; }
+      .message-row.user { background-color: transparent; }
+      .message-row.bot { background-color: rgba(255, 255, 255, 0.02); }
+      .message-row.highlight-flash { background-color: rgba(59, 130, 246, 0.14) !important; }
+
+      .message-content { max-width: 800px; width: 100%; display: flex; gap: 20px; font-size: 15px; }
+      .avatar { width: 32px; height: 32px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; flex-shrink: 0; color: #fff; }
+      .user .avatar { background-color: #5436da; }
+      .bot .avatar { background-color: transparent; overflow: hidden; }
+
+      .text-and-actions { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+      .msg-meta-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); margin-bottom: 2px; flex-wrap: wrap; }
+      .msg-sender { font-weight: 600; color: var(--text-main); }
+      .bot .msg-sender { color: var(--accent); }
+      .msg-num-badge { background: rgba(255, 255, 255, 0.07); padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; color: var(--text-muted); }
+
+      .text-wrapper { line-height: 1.75; color: var(--text-main); word-wrap: break-word; overflow-wrap: break-word; }
+
+      /* --- MARKDOWN RICH TEXT STYLING (Matching index.html) --- */
+      .text-wrapper table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.15); border: 1px solid var(--border); }
+      .text-wrapper th, .text-wrapper td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; vertical-align: top; line-height: 1.6; }
+      .text-wrapper th { background-color: rgba(255, 255, 255, 0.05); font-weight: 600; color: var(--accent); }
+      .text-wrapper tr:nth-child(even) { background-color: rgba(255, 255, 255, 0.02); }
+      .text-wrapper img { max-width: 100%; height: auto; border-radius: 8px; margin: 12px 0; border: 1px solid var(--border); }
+      .text-wrapper pre { background-color: #000; padding: 12px; border-radius: 6px; overflow-x: auto; margin: 12px 0; border: 1px solid var(--border); white-space: pre; }
+      .text-wrapper code { font-family: monospace; background-color: rgba(255, 255, 255, 0.1); padding: 2px 5px; border-radius: 4px; font-size: 13px; color: #e2e8f0; }
+      .text-wrapper pre code { background-color: transparent; padding: 0; }
+      .text-wrapper p { margin-bottom: 10px; }
+      .text-wrapper p:last-child { margin-bottom: 0; }
+      .text-wrapper h1, .text-wrapper h2, .text-wrapper h3, .text-wrapper h4 { margin: 16px 0 8px; font-weight: 600; color: #fff; line-height: 1.35; }
+      .text-wrapper ul, .text-wrapper ol { margin: 10px 0 10px 24px; padding-left: 0; }
+      .text-wrapper li { margin-bottom: 4px; }
+      .text-wrapper blockquote { border-left: 3px solid var(--accent); margin: 12px 0; color: var(--text-muted); font-style: italic; background: rgba(59, 130, 246, 0.05); padding: 10px 14px; border-radius: 0 6px 6px 0; }
+      .text-wrapper hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+
+      .action-bar { display: flex; gap: 6px; opacity: 0.65; transition: opacity 0.2s ease; margin-top: 4px; }
+      .message-row:hover .action-bar { opacity: 1; }
+      .action-btn { background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 6px 8px; border-radius: 4px; display: flex; align-items: center; gap: 6px; transition: all 0.2s; font-size: 12px; }
+      .action-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-main); }
+      .action-btn.active { color: var(--accent); }
+
+      /* Bottom Reader Bar (Styled like index.html .input-container / .input-box) */
+      .input-container { padding: 14px 20px 18px; display: flex; justify-content: center; background: linear-gradient(180deg, transparent, var(--bg-main) 30%); z-index: 10; }
+      .input-box {
+        max-width: 800px; width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+        background-color: var(--bg-input); border: 1px solid var(--border); border-radius: 12px; padding: 10px 16px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1); font-size: 13px; color: var(--text-muted);
+      }
+      .reader-nav-btns { display: flex; align-items: center; gap: 8px; }
+      .reader-nav-btn {
+        background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border); color: var(--text-main);
+        padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.2s;
+      }
+      .reader-nav-btn:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+      /* Bookmarks Modal */
+      .modal-overlay {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(8px);
+        display: none; justify-content: center; align-items: center; z-index: 2000;
+      }
+      .modal-content {
+        background: #121214; padding: 30px; border-radius: 16px; width: 92%; max-width: 800px; max-height: 85vh;
+        border: 1px solid rgba(255,255,255,0.08); position: relative; display: flex; flex-direction: column;
+        box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+      }
+      .modal-close {
+        position: absolute; top: 16px; right: 16px; background: none; border: none;
+        color: var(--text-muted); font-size: 22px; cursor: pointer; width: 32px; height: 32px; border-radius: 50%;
+      }
+      .modal-close:hover { color: #fff; background: rgba(255,255,255,0.05); }
+      .bookmarks-modal-body { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 12px; margin-top: 15px; padding-right: 4px; }
+      .bookmark-card { background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 15px; cursor: pointer; transition: border-color 0.2s; }
+      .bookmark-card:hover { border-color: var(--accent); }
+      .bookmark-prompt { font-weight: 600; margin-bottom: 8px; color: var(--text-main); font-size: 14px; }
+      .bookmark-response { color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+
+      /* Mobile */
+      .menu-btn { display: none; background: none; border: none; color: var(--text-main); font-size: 22px; cursor: pointer; }
+      .mobile-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.6); z-index: 999; backdrop-filter: blur(2px); }
+
+      @media (max-width: 768px) {
+        .menu-btn { display: block; }
+        .sidebar { position: fixed; left: -350px; height: 100%; transition: left 0.3s ease; }
+        .sidebar.open { left: 0; }
+        .mobile-overlay.open { display: block; }
+        .close-sidebar-btn { display: block; }
+        .input-container { padding: 10px 12px 16px; }
+        .header-badge { display: none; }
+      }
+
+      @media print {
+        .sidebar, .input-container, .header-actions, .action-bar, .menu-btn { display: none !important; }
+        body, .main-content, .chat-wrapper, .chat-container { height: auto !important; overflow: visible !important; background: #0e0e16 !important; color: #ececec !important; }
+        .message-row { page-break-inside: avoid; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="sidebar" id="sidebar">
+      <button class="close-sidebar-btn" onclick="toggleSidebar()">✕</button>
+      <button class="new-chat-btn active" id="allMessagesBtn" onclick="selectAllMessages()">
+        <span style="display:flex; align-items:center; gap:8px;">
+          <svg style="width: 16px; height: 16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+          All Messages
+        </span>
+        <span class="count-pill" id="totalMsgPill">0</span>
+      </button>
+
+      <div class="user-filter-box" id="userFilterBox">
+        <select id="userSelect" onchange="onUserFilterChange()"></select>
+      </div>
+
+      <div class="sidebar-sections">
+        <div class="history-section">
+          <div class="search-container">
+            <input type="text" id="searchInput" placeholder="Search history or messages..." oninput="onSearchInput()" />
+            <button class="clear-search-btn" id="clearSearchBtn" onclick="clearSearch()">✕</button>
+          </div>
+
+          <div class="nav-mode-tabs">
+            <button class="nav-mode-btn active" id="modeQuestionsBtn" onclick="setSidebarMode('questions')">Questions (Q&A)</button>
+            <button class="nav-mode-btn" id="modeSessionsBtn" onclick="setSidebarMode('sessions')">Sessions</button>
+          </div>
+
+          <div class="section-label">
+            <span id="sidebarListLabel">Questions</span>
+            <span id="sidebarListCount" style="font-size: 11px;"></span>
+          </div>
+          <div class="history-list" id="historyList"></div>
+        </div>
+
+        <div class="bookmarks-section">
+          <div class="section-label">
+            <span>Bookmarked Replies</span>
+            <span id="bookmarkCountLabel" style="font-size: 11px;">0</span>
+          </div>
+          <div class="bookmarks-list" id="bookmarksSidebarList"></div>
+          <button class="show-all-btn" onclick="openBookmarksModal()">Show all bookmarks</button>
+        </div>
+      </div>
+
+      <div class="profile-section">
+        <div class="profile-info">
+          <div class="profile-avatar" id="profileAvatar">U</div>
+          <div class="profile-meta">
+            <span class="profile-name" id="usernameDisplay">User</span>
+            <span class="profile-sub" id="exportDateDisplay">Exported Archive</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mobile-overlay" id="mobileOverlay" onclick="toggleSidebar()"></div>
+
+    <div class="main-content" id="mainContent">
+      <div class="header">
+        <div style="display:flex; align-items:center; gap:12px;">
+          <button class="menu-btn" onclick="toggleSidebar()">☰</button>
+          <div class="header-center">
+            <span class="header-title">Light Revealed Chatbot</span>
+            <span class="header-badge" id="activeFilterBadge">All Messages</span>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button class="header-btn" onclick="scrollChat('top')" title="Jump to Top">⬆ Top</button>
+          <button class="header-btn" onclick="scrollChat('bottom')" title="Jump to Bottom">⬇ Bottom</button>
+          <button class="header-btn" onclick="window.print()" title="Print or Save as PDF">🖨 Print</button>
+        </div>
+      </div>
+
+      <div class="chat-wrapper">
+        <div class="chat-container" id="chat-container"></div>
+        <div class="input-container">
+          <div class="input-box">
+            <span id="readerStatusText">Viewing exported conversation history</span>
+            <div class="reader-nav-btns">
+              <button class="reader-nav-btn" onclick="stepQuestion(-1)">↑ Prev Question</button>
+              <button class="reader-nav-btn" onclick="stepQuestion(1)">↓ Next Question</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="bookmarksModal">
+      <div class="modal-content">
+        <button class="modal-close" onclick="closeBookmarksModal()">&times;</button>
+        <h2 style="font-size: 20px; font-weight: 600;">Bookmarked Responses</h2>
+        <div class="bookmarks-modal-body" id="bookmarksModalBody"></div>
+      </div>
+    </div>
+
+    <script id="chat-archive-data" type="application/json">${safeJson}<\/script>
+    <script>
+      const ARCHIVE = JSON.parse(document.getElementById('chat-archive-data').textContent);
+      const ALL_MESSAGES = ARCHIVE.messages || [];
+      const LOGO_URI = ARCHIVE.logoDataUri || '';
+
+      const COPY_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+      const COPY_SUCCESS_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+      const BOOKMARK_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>';
+      const FALLBACK_BOT_SVG = '<div style="width:32px;height:32px;border-radius:6px;background:linear-gradient(135deg,#3b82f6,#1d4ed8);display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;font-size:13px;">LR</div>';
+
+      let selectedUser = 'ALL';
+      let selectedSessionKey = null;
+      let sidebarMode = 'questions';
+      let searchQuery = '';
+      let currentQuestionCursor = -1;
+      let bookmarkedIds = new Set(ALL_MESSAGES.filter(m => m.isBookmarked).map(m => m.idx));
+
+      function toggleSidebar() {
+        document.getElementById('sidebar').classList.toggle('open');
+        document.getElementById('mobileOverlay').classList.toggle('open');
+      }
+
+      function escapeHtml(str) {
+        return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      }
+
+      function getFilteredMessages(ignoreSession = false) {
+        return ALL_MESSAGES.filter(m => {
+          if (selectedUser !== 'ALL' && m.username !== selectedUser) return false;
+          if (!ignoreSession && selectedSessionKey && m.sessionKey !== selectedSessionKey) return false;
+          if (searchQuery) {
+            const q = searchQuery.toLowerCase();
+            return m.raw.toLowerCase().includes(q) || m.username.toLowerCase().includes(q) || m.timeStr.toLowerCase().includes(q);
+          }
+          return true;
+        });
+      }
+
+      function initArchiveApp() {
+        const users = Array.from(new Set(ALL_MESSAGES.map(m => m.username)));
+        const userFilterBox = document.getElementById('userFilterBox');
+        const userSelect = document.getElementById('userSelect');
+
+        if (users.length > 1) {
+          userFilterBox.style.display = 'block';
+          userSelect.innerHTML = '<option value="ALL">All Users (' + users.length + ')</option>' +
+            users.map(u => {
+              const cnt = ALL_MESSAGES.filter(m => m.username === u).length;
+              return '<option value="' + escapeHtml(u) + '">' + escapeHtml(u) + ' (' + cnt + ' msgs)</option>';
+            }).join('');
+        }
+
+        updateProfileFooter(users);
+        document.getElementById('exportDateDisplay').innerText = 'Exported ' + (ARCHIVE.exportedAt || '');
+        document.getElementById('totalMsgPill').innerText = ALL_MESSAGES.length;
+
+        renderSidebarList();
+        renderChatMessages();
+        renderBookmarksUI();
+      }
+
+      function updateProfileFooter(users) {
+        const displayUser = selectedUser !== 'ALL' ? selectedUser : (users.length === 1 ? users[0] : users.length + ' Users');
+        document.getElementById('usernameDisplay').innerText = displayUser;
+        document.getElementById('profileAvatar').innerText = String(displayUser || 'U').charAt(0).toUpperCase();
+      }
+
+      function onUserFilterChange() {
+        selectedUser = document.getElementById('userSelect').value;
+        selectedSessionKey = null;
+        const users = Array.from(new Set(ALL_MESSAGES.map(m => m.username)));
+        updateProfileFooter(users);
+        renderSidebarList();
+        renderChatMessages();
+      }
+
+      function setSidebarMode(mode) {
+        sidebarMode = mode;
+        document.getElementById('modeQuestionsBtn').classList.toggle('active', mode === 'questions');
+        document.getElementById('modeSessionsBtn').classList.toggle('active', mode === 'sessions');
+        document.getElementById('sidebarListLabel').innerText = mode === 'questions' ? 'Questions (Click to Jump)' : 'Conversation Sessions';
+        renderSidebarList();
+      }
+
+      function selectAllMessages() {
+        selectedSessionKey = null;
+        document.getElementById('allMessagesBtn').classList.add('active');
+        document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
+        renderChatMessages();
+      }
+
+      function onSearchInput() {
+        searchQuery = document.getElementById('searchInput').value.trim();
+        document.getElementById('clearSearchBtn').style.display = searchQuery ? 'block' : 'none';
+        renderSidebarList();
+        renderChatMessages();
+      }
+
+      function clearSearch() {
+        document.getElementById('searchInput').value = '';
+        searchQuery = '';
+        document.getElementById('clearSearchBtn').style.display = 'none';
+        renderSidebarList();
+        renderChatMessages();
+      }
+
+      function renderSidebarList() {
+        const listEl = document.getElementById('historyList');
+        listEl.innerHTML = '';
+        const baseMsgs = getFilteredMessages(true);
+
+        if (sidebarMode === 'questions') {
+          const userPrompts = baseMsgs.filter(m => m.role === 'user');
+          document.getElementById('sidebarListCount').innerText = userPrompts.length;
+
+          userPrompts.forEach((m, qIdx) => {
+            const item = document.createElement('div');
+            item.className = 'history-item';
+            item.innerHTML =
+              '<div class="history-item-title">Q' + (qIdx + 1) + ': ' + escapeHtml(m.raw) + '</div>' +
+              '<div class="history-item-meta"><span>' + escapeHtml(m.username) + '</span><span>' + escapeHtml(m.timeStr) + '</span></div>';
+            item.onclick = () => {
+              document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
+              item.classList.add('active');
+              if (selectedSessionKey && selectedSessionKey !== m.sessionKey) {
+                selectedSessionKey = null;
+                document.getElementById('allMessagesBtn').classList.add('active');
+                renderChatMessages();
+              }
+              jumpToMessage(m.idx);
+              if (window.innerWidth <= 768) toggleSidebar();
+            };
+            listEl.appendChild(item);
+          });
+        } else {
+          const sessionMap = new Map();
+          baseMsgs.forEach(m => {
+            if (!sessionMap.has(m.sessionKey)) {
+              sessionMap.set(m.sessionKey, {
+                sessionKey: m.sessionKey,
+                username: m.username,
+                firstPrompt: m.role === 'user' ? m.raw : 'Conversation Session',
+                firstTime: m.timeStr,
+                count: 0
+              });
+            }
+            const s = sessionMap.get(m.sessionKey);
+            if (s.firstPrompt === 'Conversation Session' && m.role === 'user') s.firstPrompt = m.raw;
+            s.count++;
+          });
+
+          const sessions = Array.from(sessionMap.values());
+          document.getElementById('sidebarListCount').innerText = sessions.length;
+
+          sessions.forEach((s, sIdx) => {
+            const item = document.createElement('div');
+            item.className = 'history-item' + (selectedSessionKey === s.sessionKey ? ' active' : '');
+            item.innerHTML =
+              '<div class="history-item-title">' + escapeHtml(s.firstPrompt) + '</div>' +
+              '<div class="history-item-meta"><span>' + escapeHtml(s.username) + ' • ' + s.count + ' msgs</span><span>' + escapeHtml(s.firstTime.split(',')[0]) + '</span></div>';
+            item.onclick = () => {
+              selectedSessionKey = s.sessionKey;
+              document.getElementById('allMessagesBtn').classList.remove('active');
+              document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
+              item.classList.add('active');
+              renderChatMessages();
+              if (window.innerWidth <= 768) toggleSidebar();
+            };
+            listEl.appendChild(item);
+          });
+        }
+      }
+
+      function renderChatMessages() {
+        const container = document.getElementById('chat-container');
+        container.innerHTML = '';
+        const visible = getFilteredMessages(false);
+
+        const promptCount = visible.filter(m => m.role === 'user').length;
+        const badgeText = (selectedSessionKey ? 'Filtered Session' : (selectedUser !== 'ALL' ? selectedUser : 'All Messages')) +
+          ' • ' + visible.length + ' messages (' + promptCount + ' Q&As)';
+        document.getElementById('activeFilterBadge').innerText = badgeText;
+        document.getElementById('readerStatusText').innerText = badgeText;
+
+        if (visible.length === 0) {
+          container.innerHTML = '<div style="text-align:center; color: var(--text-muted); padding: 60px 20px;">No messages match your current filter.</div>';
+          return;
+        }
+
+        let qCounter = 0;
+        visible.forEach(m => {
+          if (m.role === 'user') qCounter++;
+          const row = document.createElement('div');
+          row.className = 'message-row ' + m.role;
+          row.id = 'msg-row-' + m.idx;
+          row.dataset.role = m.role;
+
+          const avatarHtml = m.role === 'user'
+            ? '<div class="avatar">' + escapeHtml(m.username.charAt(0).toUpperCase()) + '</div>'
+            : (LOGO_URI
+                ? '<div class="avatar bot-avatar"><img src="' + LOGO_URI + '" style="width: 100%; border-radius: 4px; display: block;" alt="LR" /></div>'
+                : FALLBACK_BOT_SVG);
+
+          const senderLabel = m.role === 'user' ? escapeHtml(m.username) : 'Light Revealed';
+          const numBadge = m.role === 'user' ? 'Q' + qCounter : 'Reply #' + m.idx;
+          const isBm = bookmarkedIds.has(m.idx);
+
+          row.innerHTML =
+            '<div class="message-content">' +
+              avatarHtml +
+              '<div class="text-and-actions">' +
+                '<div class="msg-meta-line">' +
+                  '<span class="msg-sender">' + senderLabel + '</span>' +
+                  '<span>•</span>' +
+                  '<span>' + escapeHtml(m.timeStr) + '</span>' +
+                  '<span class="msg-num-badge">' + numBadge + '</span>' +
+                '</div>' +
+                '<div class="text-wrapper">' + m.html + '</div>' +
+                '<div class="action-bar">' +
+                  '<button class="action-btn" title="Copy Message" onclick="copyMessageText(this, ' + m.idx + ')">' + COPY_ICON + ' <span>Copy</span></button>' +
+                  (m.role === 'bot' ? '<button class="action-btn bookmark-btn ' + (isBm ? 'active' : '') + '" title="Bookmark Reply" onclick="toggleLocalBookmark(this, ' + m.idx + ')">' + BOOKMARK_ICON + ' <span>' + (isBm ? 'Saved' : 'Bookmark') + '</span></button>' : '') +
+                '</div>' +
+              '</div>' +
+            '</div>';
+
+          container.appendChild(row);
+        });
+      }
+
+      function jumpToMessage(idx) {
+        const el = document.getElementById('msg-row-' + idx);
+        if (!el) return;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.remove('highlight-flash');
+        void el.offsetWidth;
+        el.classList.add('highlight-flash');
+        setTimeout(() => el.classList.remove('highlight-flash'), 1800);
+      }
+
+      function stepQuestion(dir) {
+        const userRows = Array.from(document.querySelectorAll('.message-row.user'));
+        if (userRows.length === 0) return;
+        currentQuestionCursor = Math.min(Math.max(currentQuestionCursor + dir, 0), userRows.length - 1);
+        const target = userRows[currentQuestionCursor];
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          target.classList.add('highlight-flash');
+          setTimeout(() => target.classList.remove('highlight-flash'), 1200);
+        }
+      }
+
+      function scrollChat(pos) {
+        const c = document.getElementById('chat-container');
+        c.scrollTo({ top: pos === 'top' ? 0 : c.scrollHeight, behavior: 'smooth' });
+      }
+
+      function copyMessageText(btn, idx) {
+        const msg = ALL_MESSAGES.find(m => m.idx === idx);
+        if (!msg) return;
+        const orig = btn.innerHTML;
+        const done = () => {
+          btn.innerHTML = COPY_SUCCESS_ICON + ' <span style="color:#10b981;font-weight:600;">Copied</span>';
+          setTimeout(() => { btn.innerHTML = orig; }, 1800);
+        };
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(msg.raw).then(done);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = msg.raw;
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); done(); } catch (e) {}
+          ta.remove();
+        }
+      }
+
+      function toggleLocalBookmark(btn, idx) {
+        if (bookmarkedIds.has(idx)) {
+          bookmarkedIds.delete(idx);
+          btn.classList.remove('active');
+          btn.innerHTML = BOOKMARK_ICON + ' <span>Bookmark</span>';
+        } else {
+          bookmarkedIds.add(idx);
+          btn.classList.add('active');
+          btn.innerHTML = BOOKMARK_ICON + ' <span>Saved</span>';
+        }
+        renderBookmarksUI();
+      }
+
+      function renderBookmarksUI() {
+        const listEl = document.getElementById('bookmarksSidebarList');
+        const bms = ALL_MESSAGES.filter(m => bookmarkedIds.has(m.idx));
+        document.getElementById('bookmarkCountLabel').innerText = bms.length;
+        listEl.innerHTML = '';
+
+        if (bms.length === 0) {
+          listEl.innerHTML = '<div style="padding: 8px 6px; font-size: 12px; color: var(--text-muted);">Click Bookmark on any reply to pin it here.</div>';
+          return;
+        }
+
+        bms.slice().reverse().slice(0, 6).forEach(bm => {
+          const div = document.createElement('div');
+          div.className = 'bookmark-item';
+          div.innerHTML = '<svg style="width: 14px; height: 14px; color: var(--accent); flex-shrink: 0;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>' +
+            '<span style="overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(bm.prompt || bm.raw) + '</span>';
+          div.onclick = () => {
+            if (selectedSessionKey) selectAllMessages();
+            jumpToMessage(bm.idx);
+          };
+          listEl.appendChild(div);
+        });
+      }
+
+      function openBookmarksModal() {
+        const body = document.getElementById('bookmarksModalBody');
+        const bms = ALL_MESSAGES.filter(m => bookmarkedIds.has(m.idx));
+        body.innerHTML = '';
+        if (bms.length === 0) {
+          body.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:20px;">No bookmarked responses in this view yet.</p>';
+        } else {
+          bms.forEach(bm => {
+            const card = document.createElement('div');
+            card.className = 'bookmark-card';
+            card.innerHTML =
+              '<div class="bookmark-prompt">Q: ' + escapeHtml(bm.prompt || 'Prompt') + '</div>' +
+              '<div class="bookmark-response text-wrapper">' + bm.html + '</div>';
+            card.onclick = () => {
+              closeBookmarksModal();
+              if (selectedSessionKey) selectAllMessages();
+              jumpToMessage(bm.idx);
+            };
+            body.appendChild(card);
+          });
+        }
+        document.getElementById('bookmarksModal').style.display = 'flex';
+      }
+
+      function closeBookmarksModal() {
+        document.getElementById('bookmarksModal').style.display = 'none';
+      }
+
+      initArchiveApp();
+    <\/script>
+  </body>
+</html>`;
+      }
+
       function openDownloadModal(type) {
         if (type === 'user' && getSelectedIds().length === 0) return alert("Select user(s) first.");
         currentDownloadType = type; document.getElementById('downloadModal').classList.add('show');
@@ -641,6 +1401,23 @@
           if (isCustom) chats = chats.slice(Math.max(0, fromIdx - 1), Math.min(chats.length, toIdx));
           if (chats.length === 0) return alert("No messages found.");
 
+          // --- RICH CHATBOT INTERFACE HTML EXPORT (Single self-contained file) ---
+          if (format === 'html') {
+            btn.innerText = "Building Chat UI...";
+            const logoDataUri = await getLogoBase64();
+            const uniqueUsers = Array.from(new Set(chats.map(c => c.username || 'Guest')));
+            const exportLabel = currentDownloadType === 'guest'
+              ? 'Public Guest Logs'
+              : (uniqueUsers.length === 1 ? uniqueUsers[0] : `${uniqueUsers.length} Users`);
+            const richHtml = buildRichChatbotHTML(chats, logoDataUri, exportLabel);
+            const safeName = exportLabel.replace(/[^a-zA-Z0-9_-]/g, '_');
+            downloadSingleBlob(richHtml, 'text/html;charset=utf-8', 'html', `Light_Revealed_${safeName}_${Date.now()}`);
+            closeModal('downloadModal');
+            if (currentDownloadType === 'user') clearSelection();
+            btn.innerText = "Download"; btn.disabled = false;
+            return;
+          }
+
           const zip = new JSZip(); const chunkSize = 100; let fileCount = 1;
           const totalChunks = Math.ceil(chats.length / chunkSize);
 
@@ -657,8 +1434,8 @@
                chunk.forEach(c => { html += `<div class="msg-header">[${new Date(c.created_at).toLocaleString()}] ${c.username || 'Guest'} - ${c.role.toUpperCase()}</div><div>${marked.parse(c.content)}</div>`; });
                html += `</body></html>`;
 
-               if (format === 'doc' || format === 'html') {
-                   totalChunks===1 ? downloadSingleBlob(html, format==='doc'?'application/msword':'text/html', format) : zip.file(`Logs_Part_${fileCount}.${format}`, html);
+               if (format === 'doc') {
+                   totalChunks===1 ? downloadSingleBlob(html, 'application/msword', format) : zip.file(`Logs_Part_${fileCount}.${format}`, html);
                } else if (format === 'pdf') {
                    const temp = document.createElement('div'); temp.innerHTML = html;
                    const opt = { margin: 0.5, filename: 'temp.pdf', html2canvas: { scale: 1 }, jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' } };
@@ -677,11 +1454,11 @@
         } catch (err) { alert("Download failed."); }
         btn.innerText = "Download"; btn.disabled = false;
       }
-      function downloadSingleBlob(data, type, ext) {
+      function downloadSingleBlob(data, type, ext, customBaseName = null) {
           const blob = type === 'blob' ? data : new Blob([data], { type });
           const link = document.createElement("a");
           link.href = URL.createObjectURL(blob);
-          link.download = `Light_Logs_${Date.now()}.${ext}`; link.click();
+          link.download = `${customBaseName || `Light_Logs_${Date.now()}`}.${ext}`; link.click();
       }
 
       // --- LIVE MONITOR TAB INTEGRATION ---
