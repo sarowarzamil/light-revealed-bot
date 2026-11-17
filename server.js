@@ -881,7 +881,7 @@ app.post("/api/admin/users/download", authenticateAdmin, async (req, res) => {
   const { userIds } = req.body;
   try {
     const result = await pool.query(`
-      SELECT u.username, m.role, m.content, m.created_at 
+      SELECT m.id, u.username, m.session_id, m.role, m.content, m.is_bookmarked, m.created_at 
       FROM messages m JOIN users u ON m.user_id = u.id 
       WHERE m.user_id = ANY($1::int[]) ORDER BY m.user_id, m.id ASC
     `, [userIds]);
@@ -892,7 +892,7 @@ app.post("/api/admin/guests/download", authenticateAdmin, async (req, res) => {
   try {
     // Fetches all available guest messages (up to the 1000 limit)
     const result = await pool.query(`
-      SELECT session_id, role, content, created_at 
+      SELECT id, session_id, role, content, created_at 
       FROM guest_messages 
       ORDER BY id ASC
     `);
