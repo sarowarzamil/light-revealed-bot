@@ -240,13 +240,14 @@ async function buildMasterBrain(isForceSync = false) {
 // --- RESILIENCE & FALLBACK CONFIGURATION ---
 const CHAT_MODEL_CHAIN = (
   process.env.GEMINI_MODELS ||
-  "gemini-4-hydrogen,gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.8-flash"
+  "gemini-3.5-flash-lite,gemini-3.6-flash,gemini-3.8-flash,gemini-3.1-flash-lite,gemini-4-hydrogen"
 )
   .split(",")
   .map((m) => m.trim())
   .filter(Boolean);
 
-const RAG_TOP_K = Math.max(4, Math.min(parseInt(process.env.RAG_TOP_K || "10", 10) || 10, 20));
+const RAG_TOP_K = Math.max(3, Math.min(parseInt(process.env.RAG_TOP_K || "8", 10) || 8, 20));
+const MAX_RAG_CHARS = Math.max(4000, parseInt(process.env.MAX_RAG_CHARS || "16000", 10) || 16000);
 
 function isRetryableGeminiError(error) {
   const status = error && error.status;
@@ -331,7 +332,13 @@ async function retrieveKnowledgeContext(userMessage) {
       [queryVector, RAG_TOP_K]
     );
 
-    return searchRes.rows.map((row) => row.content).join("\n\n---\n\n");
+    let combined = "";
+    for (const row of searchRes.rows) {
+      const piece = (combined ? "\n\n---\n\n" : "") + row.content;
+      if (combined.length + piece.length > MAX_RAG_CHARS) break;
+      combined += piece;
+    }
+    return combined || (searchRes.rows[0] ? searchRes.rows[0].content.slice(0, MAX_RAG_CHARS) : "");
   } catch (dbError) {
     console.error("Vector Search Failed:", dbError);
     return "Error loading context. Answer strictly from general knowledge.";
@@ -405,17 +412,20 @@ If—and ONLY IF—the question is completely off-topic from these core domains,
 }
 
 // --- HELPER: JITTERED BACKOFF + AUTOMATIC MODEL FALLBACK ---
-async function processCoreAIRequestWithRetry(userMessage, currentHistory, retriesPerModel = 1) {
+async function processCoreAIRequestWithRetry(userMessage, currentHistory) {
   // 1. Fetch embedding + Supabase RAG chunks ONCE (never re-run on chat retries)
   const contextText = await retrieveKnowledgeContext(userMessage);
+  console.log(`ℹ️ [Chat] RAG ready (${contextText.length} chars, ${currentHistory.length} history msgs). Primary model: "${CHAT_MODEL_CHAIN[0]}"`);
 
   let lastError = null;
 
   // 2. Try each model in the fallback chain until one succeeds
+  // Primary model gets 3 retries (4 total attempts); fallback models get 1 retry (2 attempts)
   for (let mIdx = 0; mIdx < CHAT_MODEL_CHAIN.length; mIdx++) {
     const modelName = CHAT_MODEL_CHAIN[mIdx];
+    const maxRetries = mIdx === 0 ? 3 : 1;
 
-    for (let attempt = 0; attempt <= retriesPerModel; attempt++) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const reply = await processCoreAIRequest(userMessage, currentHistory, contextText, modelName);
         if (mIdx > 0 || attempt > 0) {
@@ -426,9 +436,9 @@ async function processCoreAIRequestWithRetry(userMessage, currentHistory, retrie
         lastError = error;
         const status = error.status || "ERR";
 
-        if (isRetryableGeminiError(error) && attempt < retriesPerModel) {
-          console.warn(`⚠️ [Chat] Model "${modelName}" returned ${status}. Retrying same model (${attempt + 1}/${retriesPerModel})...`);
-          await sleepWithJitter(1500, attempt);
+        if (isRetryableGeminiError(error) && attempt < maxRetries) {
+          console.warn(`⚠️ [Chat] Model "${modelName}" returned ${status}. Retrying same model (${attempt + 1}/${maxRetries})...`);
+          await sleepWithJitter(1000, attempt);
           continue;
         }
 
