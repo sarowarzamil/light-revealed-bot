@@ -295,7 +295,7 @@ ${contextText}
   `;
 
   const model = genAI.getGenerativeModel({
-    model: "gemini-3.5-flash-lite", 
+    model: "gemini-flash-lite-latest", 
     systemInstruction: finalInstruction,
   });
 
@@ -1131,3 +1131,4 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
