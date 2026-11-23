@@ -234,27 +234,102 @@ async function buildMasterBrain(isForceSync = false) {
   }
 }
 
-// --- 2. RAG CHAT FUNCTION (Retrieval Engine) ---
-async function processCoreAIRequest(userMessage, currentHistory) {
-  
-  const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
-  const embedResult = await embeddingModel.embedContent(userMessage);
-  const queryVector = `[${embedResult.embedding.values.join(',')}]`;
+// --- RESILIENCE & FALLBACK CONFIGURATION ---
+const CHAT_MODEL_CHAIN = (
+  process.env.GEMINI_MODELS ||
+  "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-lite,gemini-3.8-flash"
+)
+  .split(",")
+  .map((m) => m.trim())
+  .filter(Boolean);
 
-  let contextText = "";
+const RAG_TOP_K = Math.max(4, Math.min(parseInt(process.env.RAG_TOP_K || "10", 10) || 10, 20));
+
+function isRetryableGeminiError(error) {
+  const status = error && error.status;
+  const msg = String((error && error.message) || "").toLowerCase();
+  return (
+    status === 503 ||
+    status === 500 ||
+    status === 502 ||
+    status === 504 ||
+    msg.includes("503") ||
+    msg.includes("overloaded") ||
+    msg.includes("high demand") ||
+    msg.includes("unavailable") ||
+    msg.includes("temporarily")
+  );
+}
+
+function isFailoverGeminiError(error) {
+  const status = error && error.status;
+  const msg = String((error && error.message) || "").toLowerCase();
+  return (
+    isRetryableGeminiError(error) ||
+    status === 429 ||
+    status === 404 ||
+    msg.includes("429") ||
+    msg.includes("404") ||
+    msg.includes("not found") ||
+    msg.includes("resource_exhausted")
+  );
+}
+
+function sleepWithJitter(baseMs, attempt) {
+  const exponential = baseMs * Math.pow(2, attempt);
+  const jitter = Math.floor(Math.random() * 600);
+  return new Promise((resolve) => setTimeout(resolve, exponential + jitter));
+}
+
+// --- 2. RAG CONTEXT RETRIEVAL (Runs ONCE per question, with its own retry) ---
+async function retrieveKnowledgeContext(userMessage) {
+  const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
+  let embedResult = null;
+  let lastEmbedErr = null;
+
+  for (let attempt = 0; attempt <= 2; attempt++) {
+    try {
+      embedResult = await embeddingModel.embedContent(userMessage);
+      break;
+    } catch (err) {
+      lastEmbedErr = err;
+      if (isRetryableGeminiError(err) && attempt < 2) {
+        console.warn(`[Embedding] gemini-embedding-2 returned ${err.status || "error"} (attempt ${attempt + 1}/3). Retrying...`);
+        await sleepWithJitter(1200, attempt);
+      } else {
+        break;
+      }
+    }
+  }
+
+  if (!embedResult) {
+    console.error("[Embedding] Failed after retries:", lastEmbedErr ? lastEmbedErr.message : "Unknown error");
+    throw lastEmbedErr;
+  }
+
+  const queryVector = `[${embedResult.embedding.values.join(",")}]`;
+
   try {
-    const searchRes = await pool.query(`
+    const searchRes = await pool.query(
+      `
       SELECT content 
       FROM knowledge_chunks 
       ORDER BY embedding <=> $1::vector 
-      LIMIT 16
-    `, [queryVector]);
+      LIMIT $2
+    `,
+      [queryVector, RAG_TOP_K]
+    );
 
-    contextText = searchRes.rows.map(row => row.content).join('\n\n---\n\n');
+    return searchRes.rows.map((row) => row.content).join("\n\n---\n\n");
   } catch (dbError) {
     console.error("Vector Search Failed:", dbError);
-    contextText = "Error loading context. Answer strictly from general knowledge.";
+    return "Error loading context. Answer strictly from general knowledge.";
   }
+}
+
+// --- 3. RAG CHAT FUNCTION WITH AUTOMATIC MODEL FALLBACK ---
+async function processCoreAIRequest(userMessage, currentHistory, preloadedContext = null, modelName = CHAT_MODEL_CHAIN[0]) {
+  const contextText = preloadedContext !== null ? preloadedContext : await retrieveKnowledgeContext(userMessage);
 
   const finalInstruction = `
     ${dynamicSystemInstruction}
@@ -295,7 +370,7 @@ ${contextText}
   `;
 
   const model = genAI.getGenerativeModel({
-    model: "gemini-flash-lite-latest", 
+    model: modelName,
     systemInstruction: finalInstruction,
   });
 
@@ -309,20 +384,45 @@ ${contextText}
   return result.response.text();
 }
 
-// --- HELPER: RETRY LOGIC FOR 503 ERRORS ---
-async function processCoreAIRequestWithRetry(userMessage, currentHistory, retries = 3) {
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      return await processCoreAIRequest(userMessage, currentHistory);
-    } catch (error) {
-      if ((error.status === 503 || (error.message && error.message.includes("503"))) && attempt < retries) {
-        console.warn(`Gemini 503 Overload detected. Retrying attempt ${attempt + 1}/${retries}...`);
-        await new Promise((resolve) => setTimeout(resolve, 4000)); 
-      } else {
-        throw error; 
+// --- HELPER: JITTERED BACKOFF + AUTOMATIC MODEL FALLBACK ---
+async function processCoreAIRequestWithRetry(userMessage, currentHistory, retriesPerModel = 1) {
+  // 1. Fetch embedding + Supabase RAG chunks ONCE (never re-run on chat retries)
+  const contextText = await retrieveKnowledgeContext(userMessage);
+
+  let lastError = null;
+
+  // 2. Try each model in the fallback chain until one succeeds
+  for (let mIdx = 0; mIdx < CHAT_MODEL_CHAIN.length; mIdx++) {
+    const modelName = CHAT_MODEL_CHAIN[mIdx];
+
+    for (let attempt = 0; attempt <= retriesPerModel; attempt++) {
+      try {
+        const reply = await processCoreAIRequest(userMessage, currentHistory, contextText, modelName);
+        if (mIdx > 0 || attempt > 0) {
+          console.log(`✅ [Chat] Recovered using model "${modelName}" (attempt ${attempt + 1}).`);
+        }
+        return reply;
+      } catch (error) {
+        lastError = error;
+        const status = error.status || "ERR";
+
+        if (isRetryableGeminiError(error) && attempt < retriesPerModel) {
+          console.warn(`⚠️ [Chat] Model "${modelName}" returned ${status}. Retrying same model (${attempt + 1}/${retriesPerModel})...`);
+          await sleepWithJitter(1500, attempt);
+          continue;
+        }
+
+        if (isFailoverGeminiError(error) && mIdx < CHAT_MODEL_CHAIN.length - 1) {
+          console.warn(`🔀 [Chat] Model "${modelName}" unavailable (${status}). Failing over to "${CHAT_MODEL_CHAIN[mIdx + 1]}"...`);
+          break; // Move immediately to the next fallback model
+        }
+
+        throw error;
       }
     }
   }
+
+  throw lastError;
 }
 
 // --- HELPER: TEXT CHUNKER FOR DISCORD LIMITS ---
@@ -1131,4 +1231,3 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
-
