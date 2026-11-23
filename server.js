@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const path = require('path');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleGenAI } = require("@google/genai");
 const { Pool } = require("pg");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
@@ -41,7 +41,7 @@ pool.connect((err) => {
 });
 
 // --- AI & KNOWLEDGE SETUP ---
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 let dynamicSystemInstruction = "";
 const guestMemoryMap = new Map(); 
 const guestRateLimitMap = new Map(); 
@@ -133,7 +133,6 @@ async function buildMasterBrain(isForceSync = false) {
     }
 
     const rawChunks = docText.split('$$$').map(c => c.trim()).filter(c => c.length >= 20); 
-    const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
 
     let currentTab = "General"; 
     const activeDocChunks = new Set();
@@ -189,27 +188,31 @@ async function buildMasterBrain(isForceSync = false) {
       const batch = chunksToAdd.slice(i, i + batchSize);
       
       try {
-        const batchRequests = batch.map(item => ({
-          content: { parts: [{ text: item.text }] }
-        }));
-        
-        const result = await embeddingModel.batchEmbedContents({ requests: batchRequests });
-        
-        if (result.embeddings && result.embeddings.length === batch.length) {
-            for (let j = 0; j < batch.length; j++) {
-                const item = batch[j];
-                const embeddingString = `[${result.embeddings[j].values.join(',')}]`;
-                
-                await pool.query(
-                  "INSERT INTO knowledge_chunks (tab_name, content, embedding) VALUES ($1, $2, $3)",
-                  [item.tab, item.text, embeddingString]
-                );
-                currentSyncStatus.saved++;
+        // With gemini-embedding-2 on @google/genai, embed each chunk individually so vectors are never merged
+        const embedResponses = await Promise.all(
+          batch.map(item =>
+            ai.models.embedContent({
+              model: "gemini-embedding-2",
+              contents: item.text
+            })
+          )
+        );
+
+        for (let j = 0; j < batch.length; j++) {
+            const item = batch[j];
+            const values = embedResponses[j] && embedResponses[j].embeddings && embedResponses[j].embeddings[0] && embedResponses[j].embeddings[0].values;
+            if (!values || !values.length) {
+                throw new Error("API returned an empty embedding vector.");
             }
-            broadcastSyncUpdate(`⚡ Batch complete: Saved progress (${currentSyncStatus.saved}/${chunksToAdd.length} chunks calculated)`);
-        } else {
-             throw new Error("API returned mismatched array dimensional block lengths.");
+            const embeddingString = `[${values.join(',')}]`;
+            
+            await pool.query(
+              "INSERT INTO knowledge_chunks (tab_name, content, embedding) VALUES ($1, $2, $3)",
+              [item.tab, item.text, embeddingString]
+            );
+            currentSyncStatus.saved++;
         }
+        broadcastSyncUpdate(`⚡ Batch complete: Saved progress (${currentSyncStatus.saved}/${chunksToAdd.length} chunks calculated)`);
         
         if (i + batchSize < chunksToAdd.length) {
             broadcastSyncUpdate("⏳ Cooldown period triggered: Sleeping 15 seconds to stay under Token limits...", "info");
@@ -237,7 +240,7 @@ async function buildMasterBrain(isForceSync = false) {
 // --- RESILIENCE & FALLBACK CONFIGURATION ---
 const CHAT_MODEL_CHAIN = (
   process.env.GEMINI_MODELS ||
-  "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-lite,gemini-3.8-flash"
+  "gemini-4-hydrogen,gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.8-flash"
 )
   .split(",")
   .map((m) => m.trim())
@@ -283,13 +286,15 @@ function sleepWithJitter(baseMs, attempt) {
 
 // --- 2. RAG CONTEXT RETRIEVAL (Runs ONCE per question, with its own retry) ---
 async function retrieveKnowledgeContext(userMessage) {
-  const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
   let embedResult = null;
   let lastEmbedErr = null;
 
   for (let attempt = 0; attempt <= 2; attempt++) {
     try {
-      embedResult = await embeddingModel.embedContent(userMessage);
+      embedResult = await ai.models.embedContent({
+        model: "gemini-embedding-2",
+        contents: userMessage,
+      });
       break;
     } catch (err) {
       lastEmbedErr = err;
@@ -302,12 +307,18 @@ async function retrieveKnowledgeContext(userMessage) {
     }
   }
 
-  if (!embedResult) {
-    console.error("[Embedding] Failed after retries:", lastEmbedErr ? lastEmbedErr.message : "Unknown error");
-    throw lastEmbedErr;
+  const values =
+    embedResult &&
+    embedResult.embeddings &&
+    embedResult.embeddings[0] &&
+    embedResult.embeddings[0].values;
+
+  if (!values || !values.length) {
+    console.error("[Embedding] Failed after retries:", lastEmbedErr ? lastEmbedErr.message : "Empty embedding vector");
+    throw lastEmbedErr || new Error("Empty embedding vector returned");
   }
 
-  const queryVector = `[${embedResult.embedding.values.join(",")}]`;
+  const queryVector = `[${values.join(",")}]`;
 
   try {
     const searchRes = await pool.query(
@@ -365,23 +376,32 @@ If—and ONLY IF—the question is completely off-topic from these core domains,
 - IF BANGLA: "এই বিষয়টি আমার সিলেবাসের বাইরে, অনুগ্রহ করে এই বিষয়ে বিশেষজ্ঞ কারও সাহায্য নিন।"
 - IF ENGLISH: "This topic is outside my syllabus, please seek assistance from a specialized expert."
 
---- RELEVANT KNOWLEDGE BASE CONTEXT ---
-${contextText}
-  `;
-
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    systemInstruction: finalInstruction,
-  });
+  `.trim();
 
   const formattedHistory = currentHistory.map((msg) => ({
     role: msg.role === "user" ? "user" : "model",
     parts: [{ text: msg.content }],
   }));
 
-  const chat = model.startChat({ history: formattedHistory });
-  const result = await chat.sendMessage(userMessage);
-  return result.response.text();
+  // Keep systemInstruction static & lightweight; attach retrieved RAG context to the current user turn
+  const userTurnText = contextText
+    ? `[RELEVANT KNOWLEDGE BASE CONTEXT]\n${contextText}\n\n[USER QUESTION]\n${userMessage}`
+    : userMessage;
+
+  const contents = [
+    ...formattedHistory,
+    { role: "user", parts: [{ text: userTurnText }] },
+  ];
+
+  const response = await ai.models.generateContent({
+    model: modelName,
+    contents,
+    config: {
+      systemInstruction: finalInstruction,
+    },
+  });
+
+  return response.text;
 }
 
 // --- HELPER: JITTERED BACKOFF + AUTOMATIC MODEL FALLBACK ---
@@ -958,6 +978,41 @@ app.get("/api/admin/stats", authenticateAdmin, async (req, res) => {
         dbSizeMB: parseFloat(mbSize)
     });
   } catch (e) { res.status(500).json({ error: "Stats error" }); }
+});
+
+// Diagnostic route: tests a bare "Say OK" call against each configured Gemini model (no RAG, no systemInstruction)
+app.get("/api/admin/test-ai", authenticateAdmin, async (req, res) => {
+  const results = [];
+  for (const modelName of CHAT_MODEL_CHAIN) {
+    const started = Date.now();
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: "Reply with just the word OK.",
+      });
+      results.push({
+        model: modelName,
+        ok: true,
+        status: 200,
+        latencyMs: Date.now() - started,
+        reply: (response.text || "").trim().slice(0, 60),
+      });
+    } catch (err) {
+      results.push({
+        model: modelName,
+        ok: false,
+        status: err.status || null,
+        latencyMs: Date.now() - started,
+        error: err.message || String(err),
+      });
+    }
+  }
+  res.json({
+    sdk: "@google/genai",
+    nodeVersion: process.version,
+    modelsTested: CHAT_MODEL_CHAIN,
+    results,
+  });
 });
 
 app.post("/api/admin/users/delete", authenticateAdmin, async (req, res) => {
